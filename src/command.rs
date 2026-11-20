@@ -4,8 +4,10 @@
 //! export writes into header byte 2. Byte 0 is `0x80` and byte 1 is `0x00`. Byte 3
 //! is `0x00` for the device commands and the caller's channel for the `VCX_PRO_*`
 //! commands. `VCX_PRO_GetComParam` and `VCX_PRO_Clear` log a name and do not write
-//! a header. Third bytes `0x44`, `0x46`, `0x81` through `0x84`, `0x87`, `0x91`,
-//! `0xF4`, and `0xF6` have no sender. `0x91` is the `VCX_ERR_INVALID_CMD` return.
+//! a header. `GetLicense` is the empty frame ordinal 21 sends last; that byte is
+//! not an immediate in the clear exports. Third bytes `0x44`, `0x46`, `0x81`,
+//! `0x82`, `0x84`, `0x87`, `0x91`, `0xF4`, and `0xF6` have no sender. `0x91` is
+//! the `VCX_ERR_INVALID_CMD` return.
 
 /// One command header, named the way the DLL logs the sender.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,6 +45,8 @@ pub enum Command {
     SetBeep = 0x8A,
     /// `VCX_DEV_GetTest` writes `0x8B`.
     GetTest = 0x8B,
+    /// Ordinal 21's last frame. Header `80 00 83 00`, empty payload.
+    GetLicense = 0x83,
     /// `VCX_DEV_GetInfo` writes `0x8C`.
     GetInfo = 0x8C,
     /// `VCX_DEV_Reset` and `VCX_DEV_ResetEx` both write `0x8D`.
@@ -116,6 +120,7 @@ impl Command {
             0x89 => Self::SetLed,
             0x8A => Self::SetBeep,
             0x8B => Self::GetTest,
+            0x83 => Self::GetLicense,
             0x8C => Self::GetInfo,
             0x8D => Self::Reset,
             0x8E => Self::SetExInfo,
@@ -164,7 +169,7 @@ pub const fn pro_send_header(second: u8, fourth: u8) -> [u8; 4] {
 mod tests {
     use super::{Command, pro_send_header};
 
-    fn every() -> [Command; 35] {
+    fn every() -> [Command; 36] {
         [
             Command::ProOpen,
             Command::ProClose,
@@ -182,6 +187,7 @@ mod tests {
             Command::SetLed,
             Command::SetBeep,
             Command::GetTest,
+            Command::GetLicense,
             Command::GetInfo,
             Command::Reset,
             Command::SetExInfo,
@@ -224,6 +230,7 @@ mod tests {
                 Command::SetLed => assert_eq!(command.code(), 0x89),
                 Command::SetBeep => assert_eq!(command.code(), 0x8A),
                 Command::GetTest => assert_eq!(command.code(), 0x8B),
+                Command::GetLicense => assert_eq!(command.code(), 0x83),
                 Command::GetInfo => assert_eq!(command.code(), 0x8C),
                 Command::Reset => assert_eq!(command.code(), 0x8D),
                 Command::SetExInfo => assert_eq!(command.code(), 0x8E),
@@ -264,9 +271,7 @@ mod tests {
 
     #[test]
     fn bytes_with_no_sender_are_unnamed() {
-        for code in [
-            0x00, 0x44, 0x46, 0x81, 0x82, 0x83, 0x84, 0x87, 0x91, 0xF4, 0xF6,
-        ] {
+        for code in [0x00, 0x44, 0x46, 0x81, 0x82, 0x84, 0x87, 0x91, 0xF4, 0xF6] {
             assert_eq!(Command::from_byte(code), None, "{code:#x}");
         }
     }

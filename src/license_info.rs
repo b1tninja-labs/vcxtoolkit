@@ -31,6 +31,8 @@ const DAY_SECONDS: u32 = 86_400;
 pub enum LicenseInfoError {
     /// The slice is not exactly `0xBEC` bytes.
     Length,
+    /// The ciphertext is not [`LICENSE_CIPHER`] bytes.
+    Cipher,
     /// A product name is not a UTF-8 C string.
     Name,
 }
@@ -39,6 +41,7 @@ impl std::fmt::Display for LicenseInfoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Length => "license info is not 0xBEC bytes",
+            Self::Cipher => "license ciphertext is not 3068 bytes",
             Self::Name => "product name is not UTF-8",
         })
     }
@@ -125,6 +128,76 @@ pub fn parse_license_info(bytes: &[u8]) -> Result<LicenseInfo, LicenseInfoError>
         period_seconds: u32_at(bytes, PERIOD),
         products,
     })
+}
+
+/// Byte length of the ciphertext `GetLicense` passes to the decipher.
+///
+/// The reply payload is one leading byte plus this body.
+pub const LICENSE_CIPHER: usize = 0xBFC;
+
+const SUM_START: u32 = 0x8DDE_6E40;
+const ROUND: u32 = 0x61C8_8647;
+
+/// Decipher the `0xBFC`-byte body of a `GetLicense` reply.
+///
+/// The key is the raw 8-byte serial followed by the 8 bytes ordinal 21 stores
+/// beside it. The plain text is the on-device buffer.
+///
+/// # Errors
+///
+/// Returns [`LicenseInfoError::Cipher`] when `body` is not [`LICENSE_CIPHER`]
+/// bytes, and [`LicenseInfoError::Name`] when a product name is not UTF-8.
+pub fn decrypt_license(body: &[u8], key: &[u8; 16]) -> Result<LicenseInfo, LicenseInfoError> {
+    if body.len() != LICENSE_CIPHER {
+        return Err(LicenseInfoError::Cipher);
+    }
+    let mut plain = body.to_vec();
+    decipher(&mut plain, key);
+    parse_license_info(&plain[..LEN])
+}
+
+fn decipher(body: &mut [u8], key: &[u8; 16]) {
+    let count = body.len() / 4;
+    let mut words = Vec::with_capacity(count);
+    for chunk in body.chunks_exact(4) {
+        let mut raw = [0_u8; 4];
+        raw.copy_from_slice(chunk);
+        words.push(u32::from_le_bytes(raw));
+    }
+    let mut key_words = [0_u32; 4];
+    for (index, chunk) in key.chunks_exact(4).enumerate() {
+        let mut raw = [0_u8; 4];
+        raw.copy_from_slice(chunk);
+        key_words[index] = u32::from_le_bytes(raw);
+    }
+    let mut total =
+        SUM_START.wrapping_sub((0x34 / u32::try_from(count).unwrap_or(1)).wrapping_mul(ROUND));
+    let mut mixed = words[0];
+    while total != 0 {
+        let slot = usize::try_from((total >> 2) & 3).unwrap_or(0);
+        let mut index = count;
+        while index > 1 {
+            index -= 1;
+            let right = words[index - 1];
+            words[index] =
+                words[index].wrapping_sub(mix(mixed, right, total, key_words[(index & 3) ^ slot]));
+            mixed = words[index];
+        }
+        let right = words[count - 1];
+        words[0] = words[0].wrapping_sub(mix(mixed, right, total, key_words[slot]));
+        mixed = words[0];
+        total = total.wrapping_add(ROUND);
+    }
+    for (index, word) in words.iter().enumerate() {
+        let start = index * 4;
+        body[start..start + 4].copy_from_slice(&word.to_le_bytes());
+    }
+}
+
+fn mix(mixed: u32, right: u32, total: u32, key_word: u32) -> u32 {
+    let left = (right >> 5) ^ mixed.wrapping_shl(2);
+    let shifted = (mixed >> 3) ^ right.wrapping_shl(4);
+    (left.wrapping_add(shifted)) ^ (total ^ mixed).wrapping_add(key_word ^ right)
 }
 
 const fn u32_at(bytes: &[u8], at: usize) -> u32 {
@@ -286,7 +359,7 @@ mod tests {
         let info = parse_license_info(&bytes).unwrap();
         assert_eq!(info.serial, SERIAL);
         assert_eq!(info.issued.to_string(), "2023-09-22");
-        assert_eq!(info.updated.to_string(), "2025-12-06");
+        assert_eq!(info.updated.to_string(), "2026-11-20");
         assert_eq!(info.period_seconds, 0x004F_1A00);
         let names: Vec<&str> = info
             .products
@@ -299,5 +372,31 @@ mod tests {
                 .iter()
                 .all(|product| product.date.to_string() == "2030-12-31")
         );
+    }
+
+    #[test]
+    fn an_eight_byte_body_deciphers_to_the_pinned_bytes() {
+        let mut body = [0_u8, 1, 2, 3, 4, 5, 6, 7];
+        let key: [u8; 16] = core::array::from_fn(|index| u8::try_from(index).unwrap_or(0));
+        super::decipher(&mut body, &key);
+        assert_eq!(body, [0x43, 0xD2, 0x6A, 0x33, 0x04, 0x8B, 0x08, 0xEC]);
+    }
+
+    #[test]
+    fn the_captured_reply_deciphers_to_the_device_buffer() {
+        let dir = std::path::Path::new(r"D:\temp\vxdiag-re\fanout");
+        let cipher = dir.join("cipher-in.bin");
+        let key_path = dir.join("cipher-key.bin");
+        let plain = dir.join("license.bin");
+        if !cipher.is_file() || !key_path.is_file() || !plain.is_file() {
+            return;
+        }
+        let body = std::fs::read(cipher).unwrap();
+        let key_bytes = std::fs::read(key_path).unwrap();
+        let mut key = [0_u8; 16];
+        key.copy_from_slice(&key_bytes);
+        let info = super::decrypt_license(&body, &key).unwrap();
+        let stored = parse_license_info(&std::fs::read(plain).unwrap()).unwrap();
+        assert_eq!(info, stored);
     }
 }

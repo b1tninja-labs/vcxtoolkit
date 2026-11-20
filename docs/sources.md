@@ -83,7 +83,10 @@ The on-device buffer is `0xBEC` bytes. The serial is the raw 8 bytes at the star
 as the UTC calendar day. The period dword at `+0x1C` is `0x004F1A00`. From `+0x64`,
 each product row is 16 bytes: an 8-byte name, a Unix timestamp, and a zero dword.
 The four named rows are `PASSTHRU`, `PDU`, `GMGDS`, and `GMT2WIN`, each dated
-2030-12-31. This crate reads that buffer. It does not write the buffer back.
+2030-12-31. The read frame is header `80 00 83 00` with an empty payload. The
+reply body is `0xBFC` ciphertext bytes, and `decrypt_license` applies the
+decipher at `0x7B2FB130`. The key's second eight bytes are still inside the
+virtualized ordinal. This crate does not write the buffer back.
 
 ## License retrieve
 

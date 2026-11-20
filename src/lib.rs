@@ -54,7 +54,10 @@ pub use image::{
     ImageError, ImageHeader, PageRecord, file_is_newer, read_header, read_pages, version_is_newer,
 };
 pub use info::{DeviceInfo, FirmwareDate, InfoError, device_info};
-pub use license_info::{LicenseDate, LicenseInfo, LicenseInfoError, Product, parse_license_info};
+pub use license_info::{
+    LICENSE_CIPHER, LicenseDate, LicenseInfo, LicenseInfoError, Product, decrypt_license,
+    parse_license_info,
+};
 pub use remote::{
     FIRMWARE_CATALOG, HttpFailure, LICENSE_SERVER, RemoteError, auth_url, decode_license,
     license_url,
