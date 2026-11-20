@@ -21,14 +21,14 @@ for this layer.
 - Reads a firmware image header and says whether that file is newer than the running version.
 - Reads the license info already stored on the device.
 - Retrieves a license from the license service.
-- Reads the firmware catalog and downloads an image only when that image is newer than the
-  running version.
+- Reads the firmware catalog and downloads the image it lists for a device. That image
+  is an update only when it is newer than the running version.
 
 ## What it does not do
 
 - It does not speak SAE J2534. That document is not in `primarysource`, so `spskit` and `obd-bridge`
   do not grow a pass-through, and neither does this crate.
-- It does not write a license or a firmware image to the device. The catalog download stops
-  when the file is not newer. The on-device license parser does not write the buffer back.
+- It does not write a license or a firmware image to the device. A file that is not newer
+  is not an update. The on-device license parser does not write the buffer back.
 - It does not read a vehicle module. A brake-module identity read is a later slice, after the port
   and the command set, and only with the car connected.

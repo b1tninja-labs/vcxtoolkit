@@ -43,13 +43,22 @@ pub fn parse_catalog(xml: &str) -> Vec<FirmwareItem> {
     items
 }
 
+/// The newest item whose PID list contains `pid`.
+///
+/// This is the image the catalog lists for the device, including when it matches
+/// the running version.
+#[must_use]
+pub fn firmware_for(items: &[FirmwareItem], pid: u32) -> Option<&FirmwareItem> {
+    items
+        .iter()
+        .filter(|item| item.pids.contains(&pid))
+        .max_by_key(|item| u32::from_be_bytes(item.version))
+}
+
 /// The newest item whose PID list contains `pid` and whose version is newer than `running`.
 #[must_use]
 pub fn newer_firmware(items: &[FirmwareItem], pid: u32, running: [u8; 4]) -> Option<&FirmwareItem> {
-    items
-        .iter()
-        .filter(|item| item.pids.contains(&pid) && version_is_newer(item.version, running))
-        .max_by_key(|item| u32::from_be_bytes(item.version))
+    firmware_for(items, pid).filter(|item| version_is_newer(item.version, running))
 }
 
 fn one_item(body: &str) -> Option<FirmwareItem> {
@@ -95,7 +104,7 @@ fn version(text: &str) -> Option<[u8; 4]> {
 
 #[cfg(test)]
 mod tests {
-    use super::{newer_firmware, parse_catalog};
+    use super::{firmware_for, newer_firmware, parse_catalog};
 
     const CATALOG: &str = r"
         <FW>
@@ -136,6 +145,16 @@ mod tests {
         let older = newer_firmware(&items, 837, [1, 9, 4, 1]).expect("1.9.4.2");
         assert_eq!(older.name, "VCIA");
         assert_eq!(older.version, [1, 9, 4, 2]);
+    }
+
+    #[test]
+    fn the_matching_catalog_image_is_kept() {
+        let items = parse_catalog(CATALOG);
+        let image = firmware_for(&items, 837).expect("vcia");
+        assert_eq!(image.name, "VCIA");
+        assert_eq!(image.version, [1, 9, 4, 2]);
+        assert!(newer_firmware(&items, 837, image.version).is_none());
+        assert!(firmware_for(&items, 9999).is_none());
     }
 
     #[test]

@@ -99,8 +99,9 @@ them. It does not send ordinal 20 or ordinal 22, and it does not send the `0xFF`
 ## Firmware catalog
 
 The catalog is `FirmwareURL`, `https://www.vxdiag.net/managecenter/fws.xml`. Each
-`ITEM` has `PID`, `VERSION`, `SIZE`, `MD5`, and `URL`. A file is an update only when
-its PID list contains the device and its version dword is greater than the running
-version. On 2026-11-20 the row for PIDs 836, 837, 843, and 844 was VCIA 1.9.4.2,
-the same version this dongle is running, so nothing was downloaded. The VCI row at
-1.9.6.0 is the other PID set. This crate does not call ordinal `0x27`.
+`ITEM` has `PID`, `VERSION`, `SIZE`, `MD5`, and `URL`. `firmware_for` is the newest
+item whose PID list contains the device. A file is an update only when that version
+dword is greater than the running version. On 2026-11-20 the row for PIDs 836, 837,
+843, and 844 was VCIA 1.9.4.2, the same version this dongle is running. That image
+was downloaded anyway: 191770 bytes, header name `VCX-At40`, version 1.9.4.2. The
+VCI row at 1.9.6.0 is the other PID set. This crate does not call ordinal `0x27`.

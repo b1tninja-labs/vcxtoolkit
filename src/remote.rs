@@ -8,12 +8,13 @@
 //!
 //! The downloaded license is the buffer the manager writes with ordinal 22.
 //! This module does not send that ordinal, and it does not send the erase.
-//! A firmware image is downloaded only when [`newer_firmware`](crate::newer_firmware)
-//! selects it. The image is not written to the device.
+//! [`firmware_for`](crate::firmware_for) is the image the catalog lists for a PID,
+//! including when it matches the running version. [`newer_firmware`](crate::newer_firmware)
+//! is that image only when it is newer. Neither download is written to the device.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::catalog::{FirmwareItem, newer_firmware, parse_catalog};
+use crate::catalog::{FirmwareItem, firmware_for, newer_firmware, parse_catalog};
 use crate::hash::{base64, md5_matches, sha256};
 
 /// License service base from `LicenseServerURL`.
@@ -60,6 +61,8 @@ pub enum RemoteError {
     Size,
     /// The image MD5 is not the catalog `MD5`.
     Digest,
+    /// The catalog has no image for that PID.
+    Missing,
     /// The GET failed.
     Http(HttpFailure),
 }
@@ -84,6 +87,7 @@ impl std::fmt::Display for RemoteError {
             Self::Hex => f.write_str("license field is not hex"),
             Self::Size => f.write_str("firmware length is not the catalog size"),
             Self::Digest => f.write_str("firmware MD5 is not the catalog MD5"),
+            Self::Missing => f.write_str("catalog has no image for that PID"),
             Self::Http(HttpFailure::Transport) => f.write_str("request failed"),
             Self::Http(HttpFailure::Status(status)) => write!(f, "HTTP status {status}"),
         }
@@ -170,6 +174,21 @@ pub fn fetch_license(device_id: &str) -> Result<Vec<u8>, RemoteError> {
     decode_license(&hex)
 }
 
+/// GET the catalog image for `pid`, including when it matches the running version.
+///
+/// The bytes are not written to the device.
+///
+/// # Errors
+///
+/// Returns [`RemoteError`] when the GET fails, the catalog has no image for `pid`,
+/// or the image length or MD5 does not match the item.
+#[cfg(windows)]
+pub fn fetch_firmware(pid: u32) -> Result<Vec<u8>, RemoteError> {
+    let items = catalog_items()?;
+    let item = firmware_for(&items, pid).ok_or(RemoteError::Missing)?;
+    download_item(item)
+}
+
 /// GET the catalog and, when an item is newer than `running` for `pid`, GET that image.
 ///
 /// [`None`] means the catalog has nothing newer. The image is not written to the device.
@@ -180,15 +199,20 @@ pub fn fetch_license(device_id: &str) -> Result<Vec<u8>, RemoteError> {
 /// or the image length or MD5 does not match the item.
 #[cfg(windows)]
 pub fn fetch_newer_firmware(pid: u32, running: [u8; 4]) -> Result<Option<Vec<u8>>, RemoteError> {
-    let text = get_text(FIRMWARE_CATALOG, None)?;
-    if !text.contains("<ITEM") {
-        return Err(RemoteError::Json);
-    }
-    let items = parse_catalog(&text);
+    let items = catalog_items()?;
     let Some(item) = newer_firmware(&items, pid, running) else {
         return Ok(None);
     };
     download_item(item).map(Some)
+}
+
+#[cfg(windows)]
+fn catalog_items() -> Result<Vec<FirmwareItem>, RemoteError> {
+    let text = get_text(FIRMWARE_CATALOG, None)?;
+    if !text.contains("<ITEM") {
+        return Err(RemoteError::Json);
+    }
+    Ok(parse_catalog(&text))
 }
 
 #[cfg(windows)]
@@ -374,5 +398,20 @@ mod tests {
         assert_eq!(license.len(), 4076);
         let image = super::fetch_newer_firmware(837, [1, 9, 4, 2]).expect("catalog");
         assert!(image.is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "downloads the catalog image for PID 837"]
+    fn the_nano_catalog_image_downloads() {
+        let bytes = super::fetch_firmware(837).expect("image");
+        let path = std::path::Path::new(r"D:\temp\vxdiag-re\fanout\vcxa-1.9.4.2.bin");
+        if path.parent().is_some_and(std::path::Path::is_dir) {
+            std::fs::write(path, &bytes).expect("save");
+        }
+        assert_eq!(bytes.len(), 191_770);
+        let header = crate::image::read_header(&bytes).expect("header");
+        assert_eq!(header.version, [1, 9, 4, 2]);
+        assert_eq!(header.name(), Some("VCX-At40"));
     }
 }
