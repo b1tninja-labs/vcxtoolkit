@@ -19,5 +19,5 @@ Run these from this directory; all four must pass before a change is done.
 - Do not add a dependency without saying why in the commit message.
 - Write scratch output outside the repository; `git add -A` will commit it.
 - A test that cannot fail is not a test: break the code once, watch it fail, revert.
-- On Windows this crate opens the USB serial port and retrieves a license and a firmware catalog. It does not speak SAE J2534, and it does not write a license or a firmware image to the device.
+- On Windows this crate opens the USB serial port and retrieves a license and a firmware catalog. It does not speak SAE J2534, and it does not write a license or a firmware image to the device. The GM wrapper key belongs to `spskit`. A `PassThruSupport.04.04` record, if one is ever written, belongs here. `docs/tool-boundary.md` is the split.
 - Commit messages carry no AI attribution trailer.

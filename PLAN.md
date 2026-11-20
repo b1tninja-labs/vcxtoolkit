@@ -26,8 +26,10 @@ from a live package (`voxkit` for `vcxkit`; `gxkit`, `rxkit`, `v2kit`, `vkit`, `
 
 ## What it does not do
 
-- It does not speak SAE J2534. That document is not in `primarysource`, so `spskit` and `obd-bridge`
-  do not grow a pass-through, and neither does this crate.
+- It does not speak SAE J2534. That document is not in `primarysource`, so this crate does not grow a
+  pass-through. `PassThruSupport.04.04`, if a real Techline Connect must see a device, is this crate's
+  registry record. `spskit` owns the GM wrapper key `SOFTWARE\GM\J2534Wrapper` and does not open the
+  dongle. `j2534bridge.dll` is not assigned to either package. The split is `docs/tool-boundary.md`.
 - It does not write a license or a firmware image to the device. A file that is not newer
   is not an update. The on-device license parser does not write the buffer back.
   `docs/protocol.md` draws the manager's update sequence. The crate does not send it.

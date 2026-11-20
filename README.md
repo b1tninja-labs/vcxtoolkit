@@ -18,7 +18,8 @@ and is not started.
 ## What this is not
 
 It does not speak SAE J2534. It retrieves a license and a firmware catalog, and it does not
-write either to the device. `spskit` remains the SPS downloader.
+write either to the device. `spskit` remains the SPS downloader and does not open the dongle.
+The split is `docs/tool-boundary.md`.
 
 No specification for the frame was found. The rules were read from `VCX.dll` and checked on the wire.
 See `docs/sources.md`. The update sequence the manager runs, and which this crate does

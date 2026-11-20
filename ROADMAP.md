@@ -1,6 +1,6 @@
 # vcxtoolkit
 
-The frame, the USB open, one live `GetInfo` exchange, the image-header compare, the page records, the on-device license info, the license retrieve, and the firmware catalog have been checked. The update sequence is drawn in `docs/protocol.md`. `plan_firmware` names those steps and `hold` refuses the ones that would be sent. The vehicle row is planned in `docs/reads.md` and is not started. The crate does not write a license or a firmware image to the device.
+The frame, the USB open, one live `GetInfo` exchange, the image-header compare, the page records, the on-device license info, the license retrieve, and the firmware catalog have been checked. The update sequence is drawn in `docs/protocol.md`. `plan_firmware` names those steps and `hold` refuses the ones that would be sent. The vehicle row is planned in `docs/reads.md` and is not started. The crate does not write a license or a firmware image to the device. `docs/tool-boundary.md` says this crate owns the dongle and `spskit` owns the GM wrapper contract. Neither package implements `j2534bridge.dll`.
 
 | Status | Obligation | Anchor | Test |
 |---|---|---|---|
