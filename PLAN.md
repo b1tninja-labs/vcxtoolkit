@@ -21,6 +21,8 @@ from a live package (`voxkit` for `vcxkit`; `gxkit`, `rxkit`, `v2kit`, `vkit`, `
 - Retrieves a license from the license service.
 - Reads the firmware catalog and downloads the image it lists for a device. That image
   is an update only when it is newer than the running version.
+- Describes the firmware-update steps and builds the DFU payloads whose bytes the DLL
+  writes. It does not send them. The pass-through reads are planned in `docs/reads.md`.
 
 ## What it does not do
 

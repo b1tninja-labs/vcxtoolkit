@@ -1,6 +1,7 @@
 # Protocol
 
 What this crate sends, and the update sequence it does not send.
+The pass-through reads are planned in [reads.md](reads.md).
 
 The frame and `GetInfo` were checked on COM4 on 2026-11-20. The update sequence was
 read from `ManagerCenter.exe` (image base `0x400000`) and from `vcx-reconstructed.dll`
@@ -160,11 +161,14 @@ flowchart TD
   serial --> done["SetMode 0, return 0"]
 ```
 
-Before `SetMode 0xA5`, the function compares the device version dword with the file
-dword at image+`0x0C` (`0x7B2F9905`). When the device dword is greater it logs
-`Device FwVersion is New!` and falls through. The log is not a refusal. `ErChip`
-and `WrFlash` still run. `Head.Key` at image+`0x10` is logged and is not an
-argument of any DFU command.
+`GetMode` runs first. When its reply byte is already `0xA5`, the function jumps
+to the DFU `GetInfo` call and skips the device `GetInfo`, the version compare,
+and `SetMode 0xA5`. Otherwise it calls `VCX_DEV_GetInfo` (`0x7B2F8440`). The
+device dword in the compare is at offset `0x34` of the buffer that call fills,
+which is `DevInfo.FwVersion`. The file dword is at image+`0x0C` (`0x7B2F9905`).
+When the device dword is greater it logs `Device FwVersion is New!` and falls
+through. The log is not a refusal. `ErChip` and the page loop still run.
+`Head.Key` at image+`0x10` is logged and is not an argument of any DFU command.
 
 Each DFU command uses the internal buffer above, with channel `0x00`.
 
@@ -174,7 +178,7 @@ Each DFU command uses the internal buffer above, with channel `0x00`.
 | `GetMode` | `0xF1` | empty. The reply length must be at least 2 |
 | `GetInfo` | `0xF2` | empty. The reply length must be at least `0x21` |
 | `ErChip` | `0xF3` | empty. Called once, before the page loop |
-| `WrFlash` | `0xF5` | the page payload. No page index is inserted |
+| `WrFlash` | `0xF5` | the buffer ordinal 37 is given. No page index is inserted |
 | `WrSerial` | `0xF7` | 8 bytes, or the function returns `0x94` |
 
 There is no sender for `0xF4` or `0xF6`. `VCX_DEV_Reset` is not called from this
@@ -183,12 +187,36 @@ parameter, `0x82` for a send failure, and `0x83` for a receive failure. Success 
 the whole update is `0`, at `0x7B2F9C08`. A refused name or a missed boot mode is
 `0xFF`.
 
-Before `WrFlash`, `0x7B2FAB90` rewrites the page in place. The round constant it
-subtracts is `0x61C88647`. The 16-byte key is the start of the buffer `VCX_DFU_GetInfo`
-just filled, not `Head.Key`. The meaning of the second record dword, the source
-pointer `WrSerial` uses when a stack slot is nonzero, and the indirect calls through
-`[0x7B2FE0B4]` and `[0x7B2FE13C]` were not recovered. This crate does not rewrite a
-page and does not send these commands.
+The 8-byte name check reads offset `0x20` of the buffer DFU `GetInfo` fills and
+compares it with `Head.Name`. When the 8 bytes differ and the device bytes begin
+`V`, `C`, `X`, the function calls `SetMode` 0 and returns `0xFF`.
+
+Before each `WrFlash`, `0x7B2FAB90` rewrites the page payload at record+8. The
+byte length is the record's first dword. The second dword is not an argument.
+The key pointer is the DFU `GetInfo` buffer; the round uses its first 16 bytes,
+not `Head.Key`. The instruction is `sub ebx, 0x61C88647`. Modulo `2^32` that
+adds `0x9E3779B9`, and the mix is added into each little-endian word.
+`rewrite_page` is that transform. It runs only when the caller supplies the key.
+This crate does not ask the dongle for the buffer.
+
+The `WrFlash` call that follows pushes the dword at the start of the loaded
+image, not the page length. Every image `read_header` accepts begins
+`A5 A5 A5 A5`, so that dword is `0xA5A5A5A5`. `VCXCommSendFrame` refuses a
+payload above `0x1026`. `write_flash` builds the buffer ordinal 37 copies, with
+no page index, and refuses a length above `0x1026`. It does not build the
+`0xA5A5A5A5` call. `plan_firmware` records that length and `hold` refuses it.
+
+`WrSerial` is called with length 8. The pointer is the stack dword at
+`[ESP+0x20]`. The prologue stores 10 there, and no later plain instruction in
+this function overwrites it. When that dword is 0 the pointer is `[ESP+0x3C]`,
+a slot this function does not write. Neither is a recovered serial, so the plan
+does not build the 8 bytes. On that zero-pointer path the function loads 10
+into `ESI` and polls `GetMode` until the reply byte is 0. The boot-mode poll,
+after `SetMode 0xA5`, decrements a stack dword and stops when the reply byte is
+`0xA5`. The plain instructions do not show that dword's initial value. The
+indirect calls through `[0x7B2FE0B4]` (immediate `0x1F4`) and `[0x7B2FE13C]`
+(immediate `0x1010`) were not resolved to named imports. The slots hold
+`70 D7 1B 75` and `20 FE 26 76`. This crate does not send these commands.
 
 The DoIP row is a different worker (`0x004363D0`). It sends `\openwrt.bin` through
 `ZWSFirmwareUpdate`, not through ordinal `0x27`. A Nano window leaves that byte clear,

@@ -9,12 +9,15 @@
 //! catalog lists for a device. An image is an update only when it is newer than
 //! the running version. `read_pages` walks the packed page records in that image.
 //! The manager's update sequence is drawn in `docs/protocol.md`.
+//! `plan_firmware` names those steps, and `hold` refuses the ones that would
+//! be sent. The pass-through reads are planned in `docs/reads.md`.
 //! On Windows it opens the USB serial port and exchanges one frame.
 //! It does not write the license or the firmware to the device, and it does not
 //! program a vehicle.
 
 mod catalog;
 mod command;
+mod dfu;
 mod exchange;
 mod frame;
 mod hash;
@@ -23,9 +26,15 @@ mod info;
 mod license_info;
 mod remote;
 mod serial;
+mod update;
 
 pub use catalog::{FirmwareItem, firmware_for, newer_firmware, parse_catalog};
 pub use command::{Command, pro_send_header};
+pub use dfu::{
+    BOOT_MODE, Built, DFU_NAME_OFFSET, DfuError, LEAVE_MODE, LEAVE_POLLS, RewriteError,
+    dfu_get_info, erase_chip, flash_length_fits, get_mode, in_boot, left_boot, name_blocks,
+    rewrite_page, set_mode, write_flash, write_serial,
+};
 #[cfg(windows)]
 pub use exchange::{ExchangeError, exchange};
 pub use frame::{Frame, FrameError, MAX_PAYLOAD, checksum, pack, unpack};
@@ -43,6 +52,7 @@ pub use remote::{fetch_firmware, fetch_license, fetch_newer_firmware};
 pub use serial::USB_BAUD;
 #[cfg(windows)]
 pub use serial::{Call, OpenError, Port, State, open_usb};
+pub use update::{Kept, Refused, UpdatePlan, UpdateStep, hold, plan_firmware};
 
 /// The name of this crate, as Cargo knows it.
 #[must_use]

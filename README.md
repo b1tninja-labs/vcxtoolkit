@@ -11,8 +11,9 @@ Status: on Windows the crate opens the USB serial port and exchanges one frame. 
 compared with that version, and the license info already on the device can be read. The crate
 retrieves a license from the license service, and it downloads the firmware image the
 catalog lists for the device. That image is an update only when it is newer than the one
-running. It does not write either to the device. A vehicle
-read is not.
+running. It does not write either to the device. `plan_firmware` names the
+update steps and does not send them. A vehicle read is planned in `docs/reads.md`
+and is not started.
 
 ## What this is not
 

@@ -117,5 +117,12 @@ Each record is a little-endian length, a second dword, and that many payload byt
 and the packed records end at the last byte of the file. Ordinal `0x27` is export 39.
 It loads the image, enters boot mode `0xA5`, erases, and writes each page. A device
 version dword that is already greater is logged and does not stop that sequence.
-The frames and the branches are in [protocol.md](protocol.md). This crate does not
-send them.
+The frames and the branches are in [protocol.md](protocol.md). `plan_firmware`
+names the steps and `hold` refuses a step that would be sent. `rewrite_page` is
+`FUN_7b2fab90`, checked against an emulation of that function. This crate does
+not send the update.
+
+The reads that would show what the dongle passes to a vehicle module are planned
+in [reads.md](reads.md). The brake-module identity row is still open: the bytes
+at a `VCX_PRO_Send` PDU's offset 6 were not in `VCX.dll` or `ManagerCenter.exe`,
+and `VCX_PRO_Recv` is virtualized. SAE J2534 is not imported.
