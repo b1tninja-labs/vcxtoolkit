@@ -122,7 +122,7 @@ names the steps and `hold` refuses a step that would be sent. `rewrite_page` is
 `FUN_7b2fab90`, checked against an emulation of that function. This crate does
 not send the update.
 
-The reads that would show what the dongle passes to a vehicle module are planned
-in [reads.md](reads.md). The brake-module identity row is still open: the bytes
-at a `VCX_PRO_Send` PDU's offset 6 were not in `VCX.dll` or `ManagerCenter.exe`,
-and `VCX_PRO_Recv` is virtualized. SAE J2534 is not imported.
+`VCXPT32.dll` `FUN_10005df0` copies the caller's data to PDU offset 6, and
+`FUN_10005a20` chooses the `VCX_PRO_Open` dword. ISO 15765 is `0x8001`. Those
+layouts are in [reads.md](reads.md). The caller's data bytes are not in that
+DLL. `VCX_PRO_Recv` is still virtualized. SAE J2534 is not imported.

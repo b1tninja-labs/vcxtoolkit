@@ -136,6 +136,41 @@ sequence and nothing past it:
 Step 3 is the open row. It stays open because the inner bytes are not recovered.
 Inventing them would be a frame this note does not have.
 
+## What the pass-through copies
+
+`VCXPT32.dll` is the caller `ManagerCenter.exe` is not. `PassThruWriteMsgs`
+(`0x100039e0`) does not contain a module request. `FUN_10005df0` refuses a data
+length above `0x1020`, writes the flags dword and that length, and copies the
+caller's bytes to PDU offset 6. `VCX_PRO_Send` (`0x7B2F5740`) stores the dword
+big-endian, the length big-endian, and then those bytes. `send_payload` builds
+that payload. It does not transmit it.
+
+`PassThruConnect` (`0x100035e0`) calls `VCX_PRO_Open` with the dword
+`FUN_10005a20` returns, then `VCX_PRO_SetComParam`, `VCX_PRO_SetFilter` with
+third argument 1, and `VCX_PRO_Start` with third argument 0. The logged names
+and the dwords are:
+
+| Caller protocol | Log name | `VCX_PRO_Open` dword |
+|---|---|---|
+| 1, `0x8000` | `VCX_PROTOCOL_J1850_VPW` | `0x8505` |
+| 2, `0x8001` | `VCX_PROTOCOL_J1850_PWM` | `0x8606` |
+| 3, `0x8002` | `VCX_PROTOCOL_ISO9141_UART` | `0x9104` |
+| 4, `0x8003` | `VCX_PROTOCOL_ISO14230_UART` | `0x9004` |
+| 5, `0x8004`, `0x8008`, `0x800f` | `VCX_PROTOCOL_ISO11898_CAN` | `0x8101` |
+| 6, `0x8005`, `0x8007`, `0x8010`, `0x10000` | `VCX_PROTOCOL_ISO15765_CAN` | `0x8001` |
+| 7, 8, 9, 10 | `VCX_PROTOCOL_J2610_SCI` | `0x8a0a` |
+| `0x800a`, `0x10004` | `VCX_PROTOCOL_KW1281_UART` | `0x9204` |
+| `0x800b`, `0x10003` | `VCX_PROTOCOL_DIAGH_UART` | `0x9104` |
+| `0x800e` | `VCX_PROTOCOL_TP20_CAN` | `0x8401` |
+| `0x80000001`, `0x80000002` | `VCX_PROTOCOL_LIN_UART` | `0x9d04` |
+
+For ISO 15765 the copied bytes are unchanged, and the flags dword receives bits
+from the caller's flag word. For J1850, `FUN_10005ce0` appends one inverted
+check byte. For the UART protocols, when flag `0x200` is clear, `FUN_10005c10`
+appends the sum of the data bytes. A brake-module identity would be those copied
+bytes. This DLL does not contain them. The dongle is still the module that
+receives `VCX_PRO_Send`. An ECU sees the copy only if the dongle forwards offset 6.
+
 ## Theory, the other bench
 
 The Voltage/obdhub bench is a different project. On that bench a module read is

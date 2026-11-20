@@ -11,6 +11,8 @@
 //! The manager's update sequence is drawn in `docs/protocol.md`.
 //! `plan_firmware` names those steps, and `hold` refuses the ones that would
 //! be sent. The pass-through reads are planned in `docs/reads.md`.
+//! `open_code` and `send_payload` are the bytes the pass-through copies.
+//! The caller's data is not invented here.
 //! On Windows it opens the USB serial port and exchanges one frame.
 //! It does not write the license or the firmware to the device, and it does not
 //! program a vehicle.
@@ -19,6 +21,7 @@ mod catalog;
 mod command;
 mod dfu;
 mod exchange;
+mod forward;
 mod frame;
 mod hash;
 mod image;
@@ -37,6 +40,9 @@ pub use dfu::{
 };
 #[cfg(windows)]
 pub use exchange::{ExchangeError, exchange};
+pub use forward::{
+    ForwardError, MAX_FORWARD, j1850_check, open_code, open_payload, send_payload, uart_sum,
+};
 pub use frame::{Frame, FrameError, MAX_PAYLOAD, checksum, pack, unpack};
 pub use image::{
     ImageError, ImageHeader, PageRecord, file_is_newer, read_header, read_pages, version_is_newer,

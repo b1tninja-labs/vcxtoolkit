@@ -10,6 +10,7 @@
   `remote` retrieves a license and a catalog firmware image. `serial` opens the USB port.
   `dfu` builds the DFU payloads the DLL writes and rewrites a page in memory.
   `update` describes the firmware-update steps and refuses the ones that would be sent.
+  `forward` builds the `VCX_PRO_Open` dword and the `VCX_PRO_Send` payload the pass-through copies.
 - `winport/` is the package `vcxtoolkit-open`. It is the Win32 boundary: this crate forbids `unsafe`,
   and `CreateFile`, `SetCommState`, `SetCommTimeouts`, `SetCommMask`, `SetupComm`, and `WinHTTP` are FFI.
   It is not a second product and it is not published.
