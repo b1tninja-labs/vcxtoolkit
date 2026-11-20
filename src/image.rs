@@ -22,6 +22,8 @@ pub enum ImageError {
     Short,
     /// `Head.Format` is not `A5 A5 A5 A5`.
     Format,
+    /// A page record ends past the slice, or its length is above `0x1026`.
+    Record,
 }
 
 impl std::fmt::Display for ImageError {
@@ -29,6 +31,7 @@ impl std::fmt::Display for ImageError {
         f.write_str(match self {
             Self::Short => "firmware image does not reach Head.PageNum",
             Self::Format => "Head.Format is not A5 A5 A5 A5",
+            Self::Record => "a page record does not fit",
         })
     }
 }
@@ -111,7 +114,8 @@ pub fn read_header(bytes: &[u8]) -> Result<ImageHeader, ImageError> {
 ///
 /// Both arrays are in log order, the same order as `DeviceInfo.fw_version`.
 /// The compare is the unsigned dword that logs `Device FwVersion is New!`.
-/// 1.9.1.0 is not newer than 1.9.4.2.
+/// 1.9.1.0 is not newer than 1.9.4.2. The DLL logs that line and still enters
+/// the boot mode. This function is only the compare.
 #[must_use]
 pub fn version_is_newer(file: [u8; 4], device: [u8; 4]) -> bool {
     u32::from_be_bytes(file) > u32::from_be_bytes(device)
@@ -126,9 +130,69 @@ pub fn file_is_newer(file: &ImageHeader, device: [u8; 4]) -> bool {
     version_is_newer(file.version, device)
 }
 
+/// One packed page after the `0x24`-byte header.
+///
+/// `VCXHexLoad` reads a little-endian length, a second little-endian dword, and
+/// then that many payload bytes. It copies the record into a slot `0x410` bytes
+/// after the previous one. `WrFlash` is called with the payload and the length.
+/// The second dword is not an argument of that call. This type does not write a page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PageRecord<'a> {
+    /// The length `WrFlash` would be called with.
+    pub length: u32,
+    /// The dword at record+4. It is not the page index.
+    pub extra: u32,
+    /// The payload bytes at record+8.
+    pub bytes: &'a [u8],
+}
+
+/// Read every page record `Head.PageNum` asks for.
+///
+/// The records are packed on disk. A length above `0x1026` is refused, which is
+/// the length `VCXCommSendFrame` rejects.
+///
+/// # Errors
+///
+/// Returns the header errors from [`read_header`], and [`ImageError::Record`]
+/// when a record runs past `bytes` or its length is above `0x1026`.
+#[must_use = "page records that are parsed and dropped were not read"]
+pub fn read_pages(bytes: &[u8]) -> Result<Vec<PageRecord<'_>>, ImageError> {
+    let header = read_header(bytes)?;
+    let mut records = Vec::new();
+    let mut offset = HEADER_LEN;
+    for _ in 0..header.page_num {
+        if bytes.len().saturating_sub(offset) < 8 {
+            return Err(ImageError::Record);
+        }
+        let mut word = [0_u8; 4];
+        word.copy_from_slice(&bytes[offset..offset + 4]);
+        let length = u32::from_le_bytes(word);
+        word.copy_from_slice(&bytes[offset + 4..offset + 8]);
+        let extra = u32::from_le_bytes(word);
+        if length > 0x1026 {
+            return Err(ImageError::Record);
+        }
+        let Ok(len) = usize::try_from(length) else {
+            return Err(ImageError::Record);
+        };
+        let start = offset + 8;
+        let end = start + len;
+        if end > bytes.len() {
+            return Err(ImageError::Record);
+        }
+        records.push(PageRecord {
+            length,
+            extra,
+            bytes: &bytes[start..end],
+        });
+        offset = end;
+    }
+    Ok(records)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ImageError, file_is_newer, read_header};
+    use super::{ImageError, file_is_newer, read_header, read_pages};
 
     /// First 64 bytes of `vcx.bin`.
     const VCX: [u8; 64] = [
@@ -216,6 +280,37 @@ mod tests {
         let mut bytes = VCX;
         bytes[4] = 0xFF;
         assert_eq!(header(&bytes).name(), None);
+    }
+
+    #[test]
+    fn one_page_record_is_the_length_the_extra_and_the_bytes() {
+        let mut bytes = vec![0_u8; 0x24];
+        bytes[0..4].copy_from_slice(&[0xA5; 4]);
+        bytes[4..12].copy_from_slice(b"VCX-At40");
+        bytes[0x20..0x24].copy_from_slice(&1_u32.to_le_bytes());
+        bytes.extend_from_slice(&4_u32.to_le_bytes());
+        bytes.extend_from_slice(&0x11_u32.to_le_bytes());
+        bytes.extend_from_slice(&[9, 8, 7, 6]);
+        let records = read_pages(&bytes).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].length, 4);
+        assert_eq!(records[0].extra, 0x11);
+        assert_eq!(records[0].bytes, &[9, 8, 7, 6]);
+    }
+
+    #[test]
+    fn a_page_longer_than_the_sender_accepts_is_refused() {
+        let mut bytes = vec![0_u8; 0x24];
+        bytes[0..4].copy_from_slice(&[0xA5; 4]);
+        bytes[0x20..0x24].copy_from_slice(&1_u32.to_le_bytes());
+        bytes.extend_from_slice(&0x1027_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        assert_eq!(read_pages(&bytes), Err(ImageError::Record));
+    }
+
+    #[test]
+    fn the_shipped_prefix_ends_inside_the_first_page() {
+        assert_eq!(read_pages(&VCX), Err(ImageError::Record));
     }
 
     #[test]

@@ -93,8 +93,11 @@ timestamp piece, the decimal Unix time, and `sign`. The signature is SHA-256 of 
 material, written as standard base64, with `+` replaced by `%2B`. The license request
 is `GET {base}/devices/{id}/license` with header `Authorization: authcode`. The id is
 the logged serial. The body field `result.license` is hex. On 2026-11-20 that hex
-decoded to 4076 bytes. Those bytes are what ordinal 22 writes. This crate downloads
-them. It does not send ordinal 20 or ordinal 22, and it does not send the `0xFF` erase.
+decoded to 4076 bytes. The manager passes a `0x1100`-byte buffer to ordinal 22.
+The export is virtualized, so the command byte and the chunking were not recovered.
+This crate downloads the bytes. It does not send ordinal 20 or ordinal 22, and it
+does not send the `0xFF` erase. The manager's order, the 32-byte compare, and the
+retry that returns success after three failures are drawn in [protocol.md](protocol.md).
 
 ## Firmware catalog
 
@@ -105,3 +108,14 @@ dword is greater than the running version. On 2026-11-20 the row for PIDs 836, 8
 843, and 844 was VCIA 1.9.4.2, the same version this dongle is running. That image
 was downloaded anyway: 191770 bytes, header name `VCX-At40`, version 1.9.4.2. The
 VCI row at 1.9.6.0 is the other PID set. This crate does not call ordinal `0x27`.
+
+## Page records and the update this crate does not send
+
+`VCXHexLoad` reads `Head.PageNum` packed records after the `0x24`-byte header.
+Each record is a little-endian length, a second dword, and that many payload bytes.
+`read_pages` returns those records. The VCIA 1.9.4.2 catalog image has 187 records
+and the packed records end at the last byte of the file. Ordinal `0x27` is export 39.
+It loads the image, enters boot mode `0xA5`, erases, and writes each page. A device
+version dword that is already greater is logged and does not stop that sequence.
+The frames and the branches are in [protocol.md](protocol.md). This crate does not
+send them.

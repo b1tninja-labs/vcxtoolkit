@@ -28,5 +28,6 @@ from a live package (`voxkit` for `vcxkit`; `gxkit`, `rxkit`, `v2kit`, `vkit`, `
   do not grow a pass-through, and neither does this crate.
 - It does not write a license or a firmware image to the device. A file that is not newer
   is not an update. The on-device license parser does not write the buffer back.
+  `docs/protocol.md` draws the manager's update sequence. The crate does not send it.
 - It does not read a vehicle module. A brake-module identity read is a later slice, after the port
   and the command set, and only with the car connected.

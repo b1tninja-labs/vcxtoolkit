@@ -1,6 +1,6 @@
 # vcxtoolkit
 
-The frame, the USB open, one live `GetInfo` exchange, the image-header compare, the on-device license info, the license retrieve, and the firmware catalog have been checked. The vehicle row is not started. The crate does not write a license or a firmware image to the device.
+The frame, the USB open, one live `GetInfo` exchange, the image-header compare, the page records, the on-device license info, the license retrieve, and the firmware catalog have been checked. The update sequence is drawn in `docs/protocol.md` and is not sent. The vehicle row is not started. The crate does not write a license or a firmware image to the device.
 
 | Status | Obligation | Anchor | Test |
 |---|---|---|---|
@@ -13,4 +13,5 @@ The frame, the USB open, one live `GetInfo` exchange, the image-header compare, 
 | [ok] | Retrieve a license from the license service, and do not write it to the device | docs/sources.md | `src/remote.rs` `the_auth_url_carries_the_timestamp_and_the_sign`, `a_license_hex_field_decodes`, `a_service_code_is_not_a_license`. Changing the XXTEA delta made the first fail. `the_nano_license_is_retrieved_and_its_firmware_is_current` is ignored by `cargo test`; on 2026-11-20 it retrieved 4076 bytes for `NCAGM26507`. |
 | [ok] | Read the firmware catalog and download an image only when its version is newer, and do not write it | docs/sources.md | `src/catalog.rs` `vcia_1_9_4_2_is_not_newer_than_the_running_nano`, `vci_1_9_6_0_is_newer_for_its_own_pids`. Treating an equal version as newer failed the first. `src/hash.rs` `sha256_of_abc_is_the_test_vector` and `md5_of_abc_is_the_test_vector`. Changing the SHA-256 initial value failed the abc test. The same ignored test found nothing newer than 1.9.4.2 for PID 837. |
 | [ok] | Download the catalog image for a PID even when it matches the running version, and do not write it | docs/sources.md | `src/catalog.rs` `the_matching_catalog_image_is_kept`. Making `firmware_for` return nothing failed it. `the_nano_catalog_image_downloads` is ignored by `cargo test`; on 2026-11-20 it downloaded 191770 bytes, header `VCX-At40` / 1.9.4.2. |
+| [ok] | Read the packed page records after the image header, and do not write them | docs/protocol.md | `src/image.rs` `one_page_record_is_the_length_the_extra_and_the_bytes`, `a_page_longer_than_the_sender_accepts_is_refused`. Reading the length as big-endian failed the first. The VCIA 1.9.4.2 file has 187 records and they end on the last byte. |
 | [open] | Read a brake-module identity from a connected car, and do not send a security seed or a write | none until the car is connected | |

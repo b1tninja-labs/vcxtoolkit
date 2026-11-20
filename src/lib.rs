@@ -7,7 +7,8 @@
 //! running version, and it reads the license info already stored on the device.
 //! It retrieves a license from the license service and the firmware image the
 //! catalog lists for a device. An image is an update only when it is newer than
-//! the running version.
+//! the running version. `read_pages` walks the packed page records in that image.
+//! The manager's update sequence is drawn in `docs/protocol.md`.
 //! On Windows it opens the USB serial port and exchanges one frame.
 //! It does not write the license or the firmware to the device, and it does not
 //! program a vehicle.
@@ -28,7 +29,9 @@ pub use command::{Command, pro_send_header};
 #[cfg(windows)]
 pub use exchange::{ExchangeError, exchange};
 pub use frame::{Frame, FrameError, MAX_PAYLOAD, checksum, pack, unpack};
-pub use image::{ImageError, ImageHeader, file_is_newer, read_header, version_is_newer};
+pub use image::{
+    ImageError, ImageHeader, PageRecord, file_is_newer, read_header, read_pages, version_is_newer,
+};
 pub use info::{DeviceInfo, FirmwareDate, InfoError, device_info};
 pub use license_info::{LicenseDate, LicenseInfo, LicenseInfoError, Product, parse_license_info};
 pub use remote::{
