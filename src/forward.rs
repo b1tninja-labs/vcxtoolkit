@@ -25,6 +25,8 @@ pub enum ForwardError {
     KeptBuffer,
     /// A field the pass-through writes was not recovered.
     Unrecovered,
+    /// `SetFilter` and `SetTimer` copy `1` or `2`, and no other byte was recovered.
+    Mode,
 }
 
 impl std::fmt::Display for ForwardError {
@@ -37,6 +39,7 @@ impl std::fmt::Display for ForwardError {
             Self::BadFilter => "the filter kind or its length is not one this pass-through sends",
             Self::KeptBuffer => "this protocol has no SET_CONFIG builder",
             Self::Unrecovered => "a SET_CONFIG field was not recovered",
+            Self::Mode => "SetFilter and SetTimer copy 1 or 2",
         })
     }
 }
@@ -279,6 +282,50 @@ pub const TIMER_PASS: u8 = 1;
 
 /// Third argument of `VCX_PRO_SetTimer` for `CLEAR_PERIODIC_MSGS`.
 pub const TIMER_CLEAR: u8 = 2;
+
+/// `VCX_PRO_Close` sends no payload.
+#[must_use]
+pub fn close_payload() -> &'static [u8] {
+    &[]
+}
+
+/// `VCX_PRO_Stop` sends no payload.
+#[must_use]
+pub fn stop_payload() -> &'static [u8] {
+    &[]
+}
+
+/// `VCX_PRO_Start` as connect calls it: one byte, [`START_MODE`].
+#[must_use]
+pub fn start_payload() -> [u8; 1] {
+    [START_MODE]
+}
+
+/// `VCX_PRO_SetFilter`'s one-byte payload. Connect sends [`FILTER_PASS`] or [`FILTER_CLEAR`].
+///
+/// # Errors
+///
+/// Returns [`ForwardError::Mode`] for any other byte.
+pub fn set_filter_payload(mode: u8) -> Result<[u8; 1], ForwardError> {
+    if mode == FILTER_PASS || mode == FILTER_CLEAR {
+        Ok([mode])
+    } else {
+        Err(ForwardError::Mode)
+    }
+}
+
+/// `VCX_PRO_SetTimer`'s one-byte payload. The recovered values are [`TIMER_PASS`] and [`TIMER_CLEAR`].
+///
+/// # Errors
+///
+/// Returns [`ForwardError::Mode`] for any other byte.
+pub fn set_timer_payload(mode: u8) -> Result<[u8; 1], ForwardError> {
+    if mode == TIMER_PASS || mode == TIMER_CLEAR {
+        Ok([mode])
+    } else {
+        Err(ForwardError::Mode)
+    }
+}
 
 /// The `SetComParam` record connect stores: key `3`, value the caller's baud.
 #[must_use]
@@ -864,10 +911,12 @@ pub fn copied_data(protocol: u32, data: &[u8], strip_uart: bool) -> Result<Vec<u
 #[cfg(test)]
 mod tests {
     use super::{
-        ChannelFields, ComRecord, FilterCopy, FilterRecord, ForwardError, TimerRecord, add_filter,
-        add_timer, baud_record, config_records, copied_data, delivered_len, j1850_check,
-        lookup_record, open_code, open_payload, pdu_flags, reply_protocol, rx_status, send_payload,
-        set_com_param, start_filter, stop_filter, uart_sum,
+        ChannelFields, ComRecord, FILTER_CLEAR, FILTER_PASS, FilterCopy, FilterRecord,
+        ForwardError, TIMER_CLEAR, TIMER_PASS, TimerRecord, add_filter, add_timer, baud_record,
+        close_payload, config_records, copied_data, delivered_len, j1850_check, lookup_record,
+        open_code, open_payload, pdu_flags, reply_protocol, rx_status, send_payload, set_com_param,
+        set_filter_payload, set_timer_payload, start_filter, start_payload, stop_filter,
+        stop_payload, uart_sum,
     };
 
     #[test]
@@ -1141,5 +1190,18 @@ mod tests {
         assert_eq!(stopped, [0x01, 0x03, 0x01, 0x01, 0x00]);
         assert_eq!(lookup_record(0).key, 0x8502);
         assert_eq!(lookup_record(0xab).value, 0xab);
+    }
+
+    #[test]
+    fn connect_sends_the_one_byte_and_the_empty_payloads() {
+        assert_eq!(close_payload(), &[] as &[u8]);
+        assert_eq!(stop_payload(), &[] as &[u8]);
+        assert_eq!(start_payload(), [0]);
+        assert_eq!(set_filter_payload(FILTER_PASS).unwrap(), [1]);
+        assert_eq!(set_filter_payload(FILTER_CLEAR).unwrap(), [2]);
+        assert_eq!(set_timer_payload(TIMER_PASS).unwrap(), [1]);
+        assert_eq!(set_timer_payload(TIMER_CLEAR).unwrap(), [2]);
+        assert_eq!(set_filter_payload(0), Err(ForwardError::Mode));
+        assert_eq!(set_timer_payload(0), Err(ForwardError::Mode));
     }
 }

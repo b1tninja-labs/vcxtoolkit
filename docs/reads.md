@@ -84,6 +84,9 @@ module that receives the command. A vehicle ECU is not the module that receives
 | `VCX_PRO_Clear` | `0x7B2F67A0` | No frame. It clears dwords in the block at `device+0x24`. |
 
 `set_com_param`, `add_filter`, and `add_timer` build these payloads and do not send them.
+`close_payload` and `stop_payload` are empty. `start_payload` is the single byte `0`.
+`set_filter_payload` and `set_timer_payload` are the single byte `1` or `2`. Any other
+byte is refused. `VCX_PRO_Recv` still has no body.
 
 `SetComParam` reads a count from argument byte 0. The payload length is `count * 6`.
 Each record is 8 bytes, starting at argument offset 4. On the wire each record is

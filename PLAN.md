@@ -22,9 +22,10 @@ from a live package (`voxkit` for `vcxkit`; `gxkit`, `rxkit`, `v2kit`, `vkit`, `
 - Reads the firmware catalog and downloads the image it lists for a device. That image
   is an update only when it is newer than the running version.
 - Describes the firmware-update steps and builds the DFU payloads whose bytes the DLL
-  writes. It does not send them. `set_com_param`, `add_filter`, and `add_timer` build the
-  recovered pass-through payloads and do not send them. The bytes an ECU would see stay
-  the caller's. The plan is `docs/reads.md`.
+  writes. It does not send them. `set_com_param`, `add_filter`, `add_timer`, and the
+  one-byte Close, Stop, Start, SetFilter, and SetTimer payloads are built and not sent.
+  The bytes an ECU would see stay the caller's. `VCX_PRO_Recv` is still not recovered.
+  The plan is `docs/reads.md`.
 
 ## What it does not do
 
