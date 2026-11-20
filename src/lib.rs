@@ -1,11 +1,15 @@
 //! VCX serial frames for a VXDIAG dongle.
 //!
-//! This crate packs and unpacks one frame. It does not open a serial port, program a vehicle,
-//! or talk to a license server.
+//! This crate packs and unpacks one frame. On Windows it also opens the USB serial port.
+//! It does not program a vehicle or talk to a license server.
 
 mod frame;
+mod serial;
 
 pub use frame::{Frame, FrameError, MAX_PAYLOAD, checksum, pack, unpack};
+pub use serial::USB_BAUD;
+#[cfg(windows)]
+pub use serial::{Call, OpenError, Port, State, open_usb};
 
 /// The name of this crate, as Cargo knows it.
 #[must_use]

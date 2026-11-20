@@ -6,13 +6,13 @@ The serial frame a VCX dongle speaks: four header bytes, a payload, a checksum, 
 (`voxkit`, and several others for `vxkit`). This name is the one the DLL uses for the same layer
 (`VCXCommSendFrame`, `VCXCommRecvFrame`).
 
-Status: the frame codec is implemented and checked against a live `GetInfo` answer. The serial port,
-the command set, and a vehicle read are not.
+Status: the frame codec is implemented and checked against a live `GetInfo` answer. On Windows
+the USB serial port opens the way `VCXCommOpen` does. The command set and a vehicle read are not.
 
 ## What this is not
 
-It does not open the port. It does not speak SAE J2534. It does not call a license server, and it
-does not write firmware. `spskit` remains the SPS downloader.
+It does not speak SAE J2534. It does not call a license server, and it does not write firmware.
+`spskit` remains the SPS downloader.
 
 No specification for the frame was found. The rules were read from `VCX.dll` and checked on the wire.
 See `docs/sources.md`.

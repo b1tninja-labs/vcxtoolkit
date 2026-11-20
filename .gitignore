@@ -1,3 +1,4 @@
 /target
+winport/target/
 *.log
 *.out

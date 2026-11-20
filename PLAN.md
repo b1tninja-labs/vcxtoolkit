@@ -13,10 +13,12 @@ for this layer.
 
 - Packs and unpacks one frame, including the checksum and the `0xDD` escape.
 - Checks that against the echo frame in the DLL and a `GetInfo` answer captured from a dongle.
+- On Windows, opens the USB serial port: overlapped read and write, 8N1, DTR on, and 921600
+  when the profile baud is 0.
 
 ## What it does not do
 
-- It does not open a serial port.
+- It does not name the command headers or parse a `GetInfo` reply.
 - It does not speak SAE J2534. That document is not in `primarysource`, so `spskit` and `obd-bridge`
   do not grow a pass-through, and neither does this crate.
 - It does not call a license server or write firmware.
