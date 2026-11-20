@@ -176,11 +176,20 @@ receives `VCX_PRO_Send`. An ECU sees the copy only if the dongle forwards offset
 
 Connect's `SetComParam` buffer is one record: count `1`, key `3`, value the
 caller's baud. `baud_record` is that record. `SetFilter`'s third argument is
-[`FILTER_PASS`](../src/forward.rs) (`1`) on connect and `2` for
-`CLEAR_MSG_FILTERS`. `Start`'s third argument is `0`, and protocols
-`0x8000` through `0x8011` and `0x80000002` skip that call. `AddFilter` copies
-the caller's pattern, mask, and flow-control bytes. No constant module id is
-in those buffers.
+`1` on connect and `2` for `CLEAR_MSG_FILTERS`. `Start`'s third argument is
+`0`, and protocols `0x8000` through `0x8011` and `0x80000002` skip that call.
+`AddFilter` copies the caller's pattern, mask, and flow-control bytes. When
+the mask flag `0x100` is set, pattern byte 0 is ORed with `0x80`. No constant
+module id is in those buffers.
+
+`SET_CONFIG` (`FUN_10005840`) replaces that one record with the list
+`config_records` builds. ISO 9141 multiplies the connect defaults by 500,
+1000, or 2000. ISO 15765 ends with key `0x23`, value `4`, and adds key
+`0x8001`, value `2`, when channel `+0x154` is not 0. A pin word of `0x060E`
+forces key `0x100` to 0. Protocol `0x800E` is not built: its phase value was
+not recovered, and a later `0x8405` record sits outside the count the packer
+sends. LIN has no builder, so the buffer already stored is sent again.
+`+0xa9` has no recovered connect default.
 
 ```mermaid
 flowchart LR
@@ -231,7 +240,9 @@ seed and stays out of this plan.
 - The third argument of `ProOpen`, beyond the protocol dword `open_code` returns.
   `ProStart` is `0` when connect calls it. `SetFilter` is `1` or `2`.
   `SetTimer` is `1` or `2`.
-- The caller's data bytes at a Send PDU's offset 6. The prefix around them is packed.
+- The caller's data bytes at a Send PDU's offset 6. The prefix, the flag map,
+  and the trailing check byte are packed. `copied_data` applies that rewrite.
+- The `0x800E` phase record, and the connect default of channel `+0xa9`.
 - The boot-mode poll's starting count, the `WrSerial` pointer, and the indirect
   slots `[0x7B2FE0B4]` and `[0x7B2FE13C]`, which belong to the update in
   [protocol.md](protocol.md) and are not vehicle reads.

@@ -19,6 +19,12 @@ pub enum ForwardError {
     TooMany,
     /// A tail is shorter than the length byte that selects it.
     ShortCopy,
+    /// The filter kind is not 1, 2, or 3, or the copy is longer than 12 bytes.
+    BadFilter,
+    /// `FUN_10005840` has no builder and sends the buffer already stored.
+    KeptBuffer,
+    /// A field the pass-through writes was not recovered.
+    Unrecovered,
 }
 
 impl std::fmt::Display for ForwardError {
@@ -28,6 +34,9 @@ impl std::fmt::Display for ForwardError {
             Self::UnknownProtocol => "protocol has no VCX_PRO_Open dword",
             Self::TooMany => "the record count does not fit in one byte",
             Self::ShortCopy => "a tail is shorter than its length byte",
+            Self::BadFilter => "the filter kind or its length is not one this pass-through sends",
+            Self::KeptBuffer => "this protocol has no SET_CONFIG builder",
+            Self::Unrecovered => "a SET_CONFIG field was not recovered",
         })
     }
 }
@@ -357,12 +366,508 @@ pub fn delivered_len(protocol: u32, length: u16, strip_uart: bool) -> Option<u16
     }
 }
 
+const SCALE_500: u32 = 500;
+const SCALE_1000: u32 = 1000;
+const SCALE_2000: u32 = 2000;
+
+/// Channel fields `FUN_10004c10` and `FUN_10005840` read.
+///
+/// [`ChannelFields::new`] sets every field except [`baud`](Self::baud) to 0.
+/// Those zeros are empty caller fields, not a second set of device defaults.
+/// [`ChannelFields::apply_connect_defaults`] writes the defaults that were
+/// recovered. It does not write [`at_0xa9`](Self::at_0xa9).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChannelFields {
+    /// The caller's baud, channel `+0x14`.
+    pub baud: u32,
+    /// Channel `+0x18`.
+    pub at_0x18: u32,
+    /// Channel `+0x1c`.
+    pub at_0x1c: u32,
+    /// Channel `+0x28`.
+    pub at_0x28: u32,
+    /// Channel `+0x30`.
+    pub at_0x30: u32,
+    /// Channel `+0x34`.
+    pub at_0x34: u32,
+    /// Channel `+0x3c`.
+    pub at_0x3c: u32,
+    /// Channel `+0x48`.
+    pub at_0x48: u32,
+    /// Channel `+0x58`.
+    pub at_0x58: u32,
+    /// Channel `+0x5c`.
+    pub at_0x5c: u32,
+    /// Channel `+0x60`.
+    pub at_0x60: u32,
+    /// Channel `+0x64`.
+    pub at_0x64: u32,
+    /// Channel `+0x84`.
+    pub at_0x84: u32,
+    /// Channel `+0x88`.
+    pub at_0x88: u32,
+    /// Channel `+0x8c`.
+    pub at_0x8c: u32,
+    /// Channel `+0x94`. A value of `0xFFFF` is stored as 0.
+    pub at_0x94: u32,
+    /// Channel `+0x98`. A value of `0xFFFF` is stored as 0.
+    pub at_0x98: u32,
+    /// Channel `+0xa8`.
+    pub at_0xa8: u8,
+    /// Channel `+0xa9`. Its connect default was not recovered.
+    pub at_0xa9: u8,
+    /// Channel `+0xd8`.
+    pub at_0xd8: u32,
+    /// Channel `+0xdc`.
+    pub at_0xdc: u32,
+    /// Channel `+0xe0`.
+    pub at_0xe0: u32,
+    /// Channel `+0xe4`.
+    pub at_0xe4: u32,
+    /// Channel `+0xe8`.
+    pub at_0xe8: u32,
+    /// Channel `+0xf4`.
+    pub at_0xf4: u32,
+    /// Channel `+0xf8`.
+    pub at_0xf8: u32,
+    /// Channel `+0xfc`.
+    pub at_0xfc: u32,
+    /// Channel `+0x14c`. The config record uses its low byte.
+    pub at_0x14c: u32,
+    /// Channel `+0x154`. A nonzero value adds the tenth ISO 15765 record.
+    pub at_0x154: u32,
+}
+
+impl ChannelFields {
+    /// Every field is 0 except the baud.
+    #[must_use]
+    pub fn new(baud: u32) -> Self {
+        Self {
+            baud,
+            at_0x18: 0,
+            at_0x1c: 0,
+            at_0x28: 0,
+            at_0x30: 0,
+            at_0x34: 0,
+            at_0x3c: 0,
+            at_0x48: 0,
+            at_0x58: 0,
+            at_0x5c: 0,
+            at_0x60: 0,
+            at_0x64: 0,
+            at_0x84: 0,
+            at_0x88: 0,
+            at_0x8c: 0,
+            at_0x94: 0,
+            at_0x98: 0,
+            at_0xa8: 0,
+            at_0xa9: 0,
+            at_0xd8: 0,
+            at_0xdc: 0,
+            at_0xe0: 0,
+            at_0xe4: 0,
+            at_0xe8: 0,
+            at_0xf4: 0,
+            at_0xf8: 0,
+            at_0xfc: 0,
+            at_0x14c: 0,
+            at_0x154: 0,
+        }
+    }
+
+    /// Writes the defaults `FUN_10004c10` stores before `SET_CONFIG`.
+    ///
+    /// `+0xa9` is left as it was.
+    pub fn apply_connect_defaults(&mut self, protocol: u32) {
+        self.at_0x18 = 0;
+        self.at_0x1c = 0;
+        self.at_0x84 = 0;
+        self.at_0x88 = 0;
+        self.at_0x8c = 0;
+        self.at_0x94 = 0;
+        self.at_0x98 = 0;
+        self.at_0xa8 = 0;
+        self.at_0x14c = 0;
+        self.at_0x154 = 0;
+        self.at_0x28 = 0x28;
+        self.at_0x30 = 0x64;
+        self.at_0x34 = match protocol {
+            6 | 0x8005 | 0x8007 | 0x8010 | 0x10000 | 0x9280 | 0x9380 | 0x9500 => 0x14,
+            1 | 2 | 0x8000 | 0x8001 | 0x9080 | 0x9100 => 0,
+            _ => 0x6e,
+        };
+        self.at_0x3c = 0x0a;
+        self.at_0x48 = 0x14;
+        self.at_0x58 = 0x12c;
+        self.at_0x5c = 0x19;
+        self.at_0x60 = 0x32;
+        self.at_0x64 = 0;
+        self.at_0xd8 = 0x0a;
+        self.at_0xdc = 0x190;
+        self.at_0xe0 = 0xc8;
+        self.at_0xe4 = 0xc8;
+        self.at_0xe8 = 1;
+        self.at_0xf4 = 1;
+        self.at_0xf8 = 0x28;
+        self.at_0xfc = 1;
+    }
+}
+
+fn rec(key: u16, value: u32) -> ComRecord {
+    ComRecord { key, value }
+}
+
+fn high_byte(byte: u8) -> u32 {
+    u32::from(byte) << 24
+}
+
+fn pin_pair(byte2: u8, byte3: u8) -> u32 {
+    u32::from(byte2) << 16 | u32::from(byte3) << 24
+}
+
+fn phase(protocol: u32, fields: &ChannelFields) -> u32 {
+    if u16::from_le_bytes([fields.at_0xa8, fields.at_0xa9]) == 0x060e {
+        return 0;
+    }
+    match protocol {
+        0x8004 | 0x8005 => 1,
+        0x8008 | 0x8007 => 2,
+        0x800f | 0x8010 => 3,
+        _ => 0,
+    }
+}
+
+fn id_two(protocol: u32, fields: &ChannelFields) -> u32 {
+    match protocol {
+        1 => high_byte(2),
+        2 => pin_pair(0x0a, 0x02),
+        3 | 4 => high_byte(7),
+        0x8000 | 0x8002 | 0x8003 | 0x800a | 0x800b | 0x10003 | 0x10004 => high_byte(fields.at_0xa9),
+        _ => pin_pair(fields.at_0xa8, fields.at_0xa9),
+    }
+}
+
+fn clear_ffff(value: u32) -> u32 {
+    if value == 0xffff { 0 } else { value }
+}
+
+fn scaled(value: u32, factor: u32) -> u32 {
+    value.wrapping_mul(factor)
+}
+
+fn uart_timing(fields: &ChannelFields) -> [ComRecord; 8] {
+    [
+        rec(0x41, scaled(fields.at_0x28, SCALE_500)),
+        rec(0x42, scaled(fields.at_0x30, SCALE_500)),
+        rec(0x43, scaled(fields.at_0x34, SCALE_500)),
+        rec(0x44, scaled(fields.at_0x3c, SCALE_500)),
+        rec(0x45, scaled(fields.at_0x58, SCALE_1000)),
+        rec(0x47, scaled(fields.at_0x5c, SCALE_1000)),
+        rec(0x46, scaled(fields.at_0x60, SCALE_1000)),
+        rec(0x4a, scaled(fields.at_0x48, SCALE_2000)),
+    ]
+}
+
+fn pack_400(fields: &ChannelFields) -> u32 {
+    let third = fields.at_0x64 & 0xff;
+    let fourth = if fields.at_0x64 == 0 || fields.at_0x8c != 0 {
+        8
+    } else {
+        9
+    };
+    0x01 | (0x01 << 8) | (third << 16) | (fourth << 24)
+}
+
+fn iso9141(protocol: u32, fields: &ChannelFields) -> Vec<ComRecord> {
+    let mut records = vec![
+        baud_record(fields.baud),
+        rec(2, id_two(protocol, fields)),
+        rec(0x401, 0x0100_0002),
+    ];
+    records.extend(uart_timing(fields));
+    records.push(rec(0x400, pack_400(fields)));
+    records
+}
+
+fn iso15765(protocol: u32, fields: &ChannelFields) -> Vec<ComRecord> {
+    let low = fields.at_0x14c & 0xff;
+    let mut records = vec![
+        baud_record(fields.baud),
+        rec(2, id_two(protocol, fields)),
+        rec(0x100, phase(protocol, fields)),
+        rec(0x104, (low << 16) | (1 << 24)),
+        rec(0x8005, fields.at_0x84),
+        rec(0x8006, fields.at_0x88),
+        rec(0x8007, clear_ffff(fields.at_0x94)),
+        rec(0x8008, clear_ffff(fields.at_0x98)),
+        rec(0x23, 4),
+    ];
+    if fields.at_0x154 != 0 {
+        records.push(rec(0x8001, 2));
+    }
+    records
+}
+
+/// The `SetComParam` records `FUN_10005840` builds.
+///
+/// Protocol `0x800E` is refused: its phase record was not recovered, and the
+/// following `0x8405` record sits outside the count the packer sends.
+///
+/// # Errors
+///
+/// Returns [`ForwardError::KeptBuffer`] when the pass-through has no builder
+/// for `protocol`, and [`ForwardError::Unrecovered`] for `0x800E`.
+pub fn config_records(
+    protocol: u32,
+    fields: &ChannelFields,
+) -> Result<Vec<ComRecord>, ForwardError> {
+    let two = id_two(protocol, fields);
+    Ok(match protocol {
+        1 | 0x8000 => vec![
+            baud_record(fields.baud),
+            rec(2, two),
+            rec(0x22, fields.at_0x18),
+            rec(0x21, 0),
+        ],
+        2 | 0x8001 => vec![
+            baud_record(fields.baud),
+            rec(2, two),
+            rec(0x22, fields.at_0x18),
+            rec(0x21, 0),
+            rec(0x8501, fields.at_0x1c),
+        ],
+        3 | 0x8002 | 4 | 0x8003 => iso9141(protocol, fields),
+        5 | 0x8004 | 0x8008 | 0x800f => vec![
+            baud_record(fields.baud),
+            rec(2, two),
+            rec(0x100, phase(protocol, fields)),
+        ],
+        6 | 0x8005 | 0x8007 | 0x8010 | 0x10000 => iso15765(protocol, fields),
+        7..=10 => vec![baud_record(fields.baud)],
+        0x800a | 0x10004 => vec![
+            baud_record(fields.baud),
+            rec(2, two),
+            rec(0x401, 0x0100_0002),
+            rec(0x45, scaled(fields.at_0xd8, SCALE_1000)),
+            rec(0x49, scaled(fields.at_0xdc, SCALE_500)),
+            rec(0x4a, scaled(fields.at_0xe0, SCALE_500)),
+            rec(0x4b, scaled(fields.at_0xe4, SCALE_500)),
+            rec(0x4c, scaled(fields.at_0xe8, SCALE_1000)),
+            rec(0x9201, scaled(fields.at_0xf4, SCALE_1000)),
+            rec(0x9202, scaled(fields.at_0xf8, SCALE_1000)),
+            rec(0x43, scaled(fields.at_0xfc, SCALE_1000)),
+        ],
+        0x800b | 0x10003 => {
+            let mut records = vec![
+                baud_record(fields.baud),
+                rec(2, two),
+                rec(0x401, 0x0100_0001),
+            ];
+            records.extend(uart_timing(fields).into_iter().take(7));
+            records
+        }
+        0x800e => return Err(ForwardError::Unrecovered),
+        _ => return Err(ForwardError::KeptBuffer),
+    })
+}
+
+/// The one-record lookup buffer. Clear and delete pass 0. Add passes the caller's byte.
+#[must_use]
+pub fn lookup_record(byte: u8) -> ComRecord {
+    rec(0x8502, u32::from(byte))
+}
+
+/// The caller's filter copy, after the one byte-0 change `FUN_10007410` makes.
+pub struct FilterCopy<'a> {
+    /// The byte stored at buffer `+4`. The returned id is this plus 1.
+    pub slot: u8,
+    /// Filter type `1`, `2`, or `3`.
+    pub kind: u8,
+    /// Pattern bytes. The same length is required of the mask.
+    pub pattern: &'a [u8],
+    /// Mask bytes.
+    pub mask: &'a [u8],
+    /// Flow-control bytes. Used when `kind` is `3`.
+    pub flow: &'a [u8],
+    /// Mask flag `0x100` is set, so pattern byte 0 gains bit `0x80`.
+    pub extend_first: bool,
+}
+
+/// The `AddFilter` record for one `PassThruStartMsgFilter`.
+///
+/// # Errors
+///
+/// Returns [`ForwardError::BadFilter`] when `kind` is not 1, 2, or 3, or a
+/// copy is longer than 12 bytes. Returns [`ForwardError::ShortCopy`] when the
+/// mask, or the type-3 flow control, is a different length from the pattern.
+pub fn start_filter(copy: &FilterCopy<'_>) -> Result<FilterRecord, ForwardError> {
+    if !matches!(copy.kind, 1..=3) || copy.pattern.len() > 12 {
+        return Err(ForwardError::BadFilter);
+    }
+    if copy.mask.len() != copy.pattern.len()
+        || (copy.kind == 3 && copy.flow.len() != copy.pattern.len())
+    {
+        return Err(ForwardError::ShortCopy);
+    }
+    let mut pattern = copy.pattern.to_vec();
+    if copy.extend_first {
+        if let Some(first) = pattern.first_mut() {
+            *first |= 0x80;
+        }
+    }
+    let selector = if copy.kind == 3 { 2 } else { 1 };
+    let Ok(at4) = u8::try_from(selector) else {
+        return Err(ForwardError::BadFilter);
+    };
+    let Ok(at12) = u8::try_from(copy.pattern.len()) else {
+        return Err(ForwardError::BadFilter);
+    };
+    Ok(FilterRecord {
+        at0: copy.slot,
+        at4,
+        at8: match copy.kind {
+            1 => 1,
+            2 => 0,
+            _ => 2,
+        },
+        at12,
+        selector,
+        from_0x0d: pattern,
+        from_0x19: copy.mask.to_vec(),
+        from_0x25: if copy.kind == 3 {
+            copy.flow.to_vec()
+        } else {
+            Vec::new()
+        },
+    })
+}
+
+/// The `AddFilter` record `PassThruStopMsgFilter` sends. The length byte is 0.
+#[must_use]
+pub fn stop_filter(slot: u8) -> FilterRecord {
+    FilterRecord {
+        at0: slot,
+        at4: 1,
+        at8: 1,
+        at12: 0,
+        selector: 1,
+        from_0x0d: Vec::new(),
+        from_0x19: Vec::new(),
+        from_0x25: Vec::new(),
+    }
+}
+
+/// PDU flags `FUN_10005df0` sets from the caller's flag word.
+///
+/// # Errors
+///
+/// Returns [`ForwardError::UnknownProtocol`] when the rewrite for `protocol`
+/// was not recovered.
+pub fn pdu_flags(protocol: u32, tx_flags: u32) -> Result<u32, ForwardError> {
+    let mut flags = 0;
+    match protocol {
+        5 | 6 | 0x8004 | 0x8005 | 0x8007 | 0x8008 | 0x800f | 0x8010 | 0x10000 => {
+            if tx_flags & 0x100 != 0 {
+                flags |= 0x100;
+            }
+            if tx_flags & 0x40 != 0 {
+                flags |= 0x200;
+            }
+            if tx_flags & 0x80 != 0 {
+                flags |= 0x400;
+            }
+            if tx_flags & 0x400 != 0 {
+                flags |= 0x1000;
+            }
+        }
+        0x800e => {
+            if tx_flags & 0x1_0000 != 0 {
+                flags |= 0x20;
+            }
+            if tx_flags & 0x100 != 0 {
+                flags |= 0x100;
+            }
+        }
+        1
+        | 2
+        | 3
+        | 4
+        | 7..=10
+        | 0x8000
+        | 0x8001
+        | 0x8002
+        | 0x8003
+        | 0x800a
+        | 0x800b
+        | 0x10003
+        | 0x10004
+        | 0x8000_0001
+        | 0x8000_0002 => {}
+        _ => return Err(ForwardError::UnknownProtocol),
+    }
+    Ok(flags)
+}
+
+/// Bytes `FUN_10005df0` places at PDU offset 6.
+///
+/// `strip_uart` means channel flag `0x200` is clear, so the UART sum is appended.
+/// J1850 appends [`j1850_check`]. Protocol `0x800E` copies from byte 4.
+///
+/// # Errors
+///
+/// Returns [`ForwardError::TooLong`] above [`MAX_FORWARD`],
+/// [`ForwardError::ShortCopy`] when an `0x800E` copy is shorter than 4 bytes,
+/// and [`ForwardError::UnknownProtocol`] when the rewrite was not recovered.
+pub fn copied_data(protocol: u32, data: &[u8], strip_uart: bool) -> Result<Vec<u8>, ForwardError> {
+    if data.len() > MAX_FORWARD {
+        return Err(ForwardError::TooLong);
+    }
+    let uart = matches!(
+        protocol,
+        3 | 4 | 0x8002 | 0x8003 | 0x800b | 0x10003 | 0x8000_0001 | 0x8000_0002
+    );
+    match protocol {
+        1 | 2 | 0x8000 | 0x8001 => {
+            let mut out = data.to_vec();
+            out.push(j1850_check(data));
+            Ok(out)
+        }
+        _ if uart => {
+            let mut out = data.to_vec();
+            if strip_uart {
+                out.push(uart_sum(data));
+            }
+            Ok(out)
+        }
+        0x800e => {
+            let Some(tail) = data.get(4..) else {
+                return Err(ForwardError::ShortCopy);
+            };
+            Ok(tail.to_vec())
+        }
+        5
+        | 6
+        | 7..=10
+        | 0x8004
+        | 0x8005
+        | 0x8007
+        | 0x8008
+        | 0x800a
+        | 0x800f
+        | 0x8010
+        | 0x10000
+        | 0x10004 => Ok(data.to_vec()),
+        _ => Err(ForwardError::UnknownProtocol),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ComRecord, FilterRecord, ForwardError, TimerRecord, add_filter, add_timer, baud_record,
-        delivered_len, j1850_check, open_code, open_payload, reply_protocol, rx_status,
-        send_payload, set_com_param, uart_sum,
+        ChannelFields, ComRecord, FilterCopy, FilterRecord, ForwardError, TimerRecord, add_filter,
+        add_timer, baud_record, config_records, copied_data, delivered_len, j1850_check,
+        lookup_record, open_code, open_payload, pdu_flags, reply_protocol, rx_status, send_payload,
+        set_com_param, start_filter, stop_filter, uart_sum,
     };
 
     #[test]
@@ -488,5 +993,153 @@ mod tests {
         assert_eq!(delivered_len(3, 1, true), None);
         assert_eq!(reply_protocol(6, 1), 5);
         assert_eq!(reply_protocol(6, 0), 6);
+    }
+
+    #[test]
+    fn iso9141_scales_the_connect_default() {
+        let mut fields = ChannelFields::new(10_400);
+        fields.apply_connect_defaults(3);
+        let records = config_records(3, &fields).unwrap();
+        assert_eq!(
+            records[3],
+            ComRecord {
+                key: 0x41,
+                value: 0x4e20
+            }
+        );
+        assert_eq!(
+            records[1],
+            ComRecord {
+                key: 2,
+                value: 0x0700_0000
+            }
+        );
+        assert_eq!(
+            records[2],
+            ComRecord {
+                key: 0x401,
+                value: 0x0100_0002
+            }
+        );
+        assert_eq!(
+            records.last(),
+            Some(&ComRecord {
+                key: 0x400,
+                value: 0x0800_0101
+            })
+        );
+    }
+
+    #[test]
+    fn iso15765_config_ends_with_record_0x23_value_4() {
+        let mut fields = ChannelFields::new(500_000);
+        fields.apply_connect_defaults(6);
+        let records = config_records(6, &fields).unwrap();
+        assert_eq!(
+            records.last(),
+            Some(&ComRecord {
+                key: 0x23,
+                value: 4
+            })
+        );
+        fields.at_0x154 = 1;
+        let with_extra = config_records(6, &fields).unwrap();
+        assert_eq!(
+            with_extra.last(),
+            Some(&ComRecord {
+                key: 0x8001,
+                value: 2
+            })
+        );
+        fields.at_0xa8 = 0x0e;
+        fields.at_0xa9 = 0x06;
+        let forced = config_records(0x8005, &fields).unwrap();
+        assert_eq!(
+            forced[2],
+            ComRecord {
+                key: 0x100,
+                value: 0
+            }
+        );
+        fields.at_0xa8 = 0;
+        fields.at_0xa9 = 0;
+        let phase = config_records(0x8005, &fields).unwrap();
+        assert_eq!(
+            phase[2],
+            ComRecord {
+                key: 0x100,
+                value: 1
+            }
+        );
+        fields.at_0x94 = 0xffff;
+        let cleared = config_records(6, &fields).unwrap();
+        assert_eq!(
+            cleared[6],
+            ComRecord {
+                key: 0x8007,
+                value: 0
+            }
+        );
+    }
+
+    #[test]
+    fn tp20_opens_but_its_config_phase_is_not_recovered() {
+        assert_eq!(open_code(0x800e), Ok(0x8401));
+        let fields = ChannelFields::new(500_000);
+        assert_eq!(
+            config_records(0x800e, &fields),
+            Err(ForwardError::Unrecovered)
+        );
+        assert_eq!(
+            config_records(0x8000_0001, &fields),
+            Err(ForwardError::KeptBuffer)
+        );
+    }
+
+    #[test]
+    fn a_tx_flag_0x40_becomes_pdu_0x200() {
+        let flags = pdu_flags(6, 0x40).unwrap();
+        let data = copied_data(6, &[0x22, 0xf1, 0x90], false).unwrap();
+        let payload = send_payload(flags, &data).unwrap();
+        assert_eq!(
+            payload,
+            [0x00, 0x00, 0x02, 0x00, 0x00, 0x03, 0x22, 0xf1, 0x90]
+        );
+        let j1850 = copied_data(1, &[0x68, 0x6a, 0xf1, 0x01, 0x00], false).unwrap();
+        assert_eq!(j1850.last(), Some(&0x17));
+        assert_eq!(
+            copied_data(3, &[0x01, 0x02, 0x03], true).unwrap(),
+            [0x01, 0x02, 0x03, 0x06]
+        );
+        assert_eq!(
+            copied_data(0x800e, &[1, 2, 3, 4, 9, 8], false).unwrap(),
+            [9, 8]
+        );
+        assert_eq!(
+            copied_data(0x800e, &[1, 2, 3], false),
+            Err(ForwardError::ShortCopy)
+        );
+    }
+
+    #[test]
+    fn a_filter_pattern_gains_0x80_when_the_mask_flag_is_set() {
+        let record = start_filter(&FilterCopy {
+            slot: 3,
+            kind: 1,
+            pattern: &[0x11, 0x22],
+            mask: &[0xff, 0x00],
+            flow: &[],
+            extend_first: true,
+        })
+        .unwrap();
+        let payload = add_filter(&[record]).unwrap();
+        assert_eq!(
+            payload,
+            [0x01, 0x03, 0x01, 0x01, 0x02, 0x91, 0x22, 0xff, 0x00]
+        );
+        let stopped = add_filter(&[stop_filter(3)]).unwrap();
+        assert_eq!(stopped, [0x01, 0x03, 0x01, 0x01, 0x00]);
+        assert_eq!(lookup_record(0).key, 0x8502);
+        assert_eq!(lookup_record(0xab).value, 0xab);
     }
 }
