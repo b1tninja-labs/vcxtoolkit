@@ -1,0 +1,17 @@
+[package]
+name = "vcxcomm"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "VCX serial frames for a VXDIAG dongle"
+license = "Apache-2.0"
+readme = "README.md"
+publish = false
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
