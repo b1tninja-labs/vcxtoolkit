@@ -1,17 +1,28 @@
 //! VCX serial frames for a VXDIAG dongle.
 //!
-//! This crate packs and unpacks one frame, names the command headers, and reads the
-//! `GetInfo` fields the DLL logs. On Windows it also opens the USB serial port.
-//! It does not program a vehicle or talk to a license server.
+//! This crate talks to a VXDIAG dongle from Rust.
+//!
+//! It packs and unpacks one frame, names the command headers, and reads the `GetInfo`
+//! fields the DLL logs. It reads a firmware image header and compares it with the
+//! running version, and it reads the license info already stored on the device.
+//! On Windows it opens the USB serial port and exchanges one frame.
+//! It does not write firmware, call a license server, or program a vehicle.
 
 mod command;
+mod exchange;
 mod frame;
+mod image;
 mod info;
+mod license_info;
 mod serial;
 
 pub use command::{Command, pro_send_header};
+#[cfg(windows)]
+pub use exchange::{ExchangeError, exchange};
 pub use frame::{Frame, FrameError, MAX_PAYLOAD, checksum, pack, unpack};
+pub use image::{ImageError, ImageHeader, file_is_newer, read_header};
 pub use info::{DeviceInfo, FirmwareDate, InfoError, device_info};
+pub use license_info::{LicenseDate, LicenseInfo, LicenseInfoError, Product, parse_license_info};
 pub use serial::USB_BAUD;
 #[cfg(windows)]
 pub use serial::{Call, OpenError, Port, State, open_usb};

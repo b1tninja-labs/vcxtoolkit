@@ -138,6 +138,18 @@ impl Port {
     pub fn read(&self, buf: &mut [u8]) -> Result<usize, OpenError> {
         self.com.read(buf)
     }
+
+    /// Write bytes.
+    ///
+    /// The overlapped write is waited out before this returns. A completed write
+    /// returns how many bytes the driver accepted. This does not pack a frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns the write call that failed.
+    pub fn write(&self, buf: &[u8]) -> Result<usize, OpenError> {
+        self.com.write(buf)
+    }
 }
 
 /// Open `\\.\COM{port}` the way `VCXCommOpen` opens a USB link.

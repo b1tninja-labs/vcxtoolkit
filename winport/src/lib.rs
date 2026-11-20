@@ -1,7 +1,7 @@
 //! Win32 calls for the VCX USB serial open.
 //!
 //! `vcxcomm` forbids `unsafe`. `CreateFile`, the DCB, the timeouts, the event mask,
-//! and the queue sizes are FFI, so they live here.
+//! the queue sizes, and the overlapped read and write are FFI, so they live here.
 
 #![cfg(windows)]
 
@@ -21,7 +21,7 @@ mod ffi {
         ERROR_IO_PENDING, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileA, FILE_FLAG_OVERLAPPED, OPEN_EXISTING, ReadFile,
+        CreateFileA, FILE_FLAG_OVERLAPPED, OPEN_EXISTING, ReadFile, WriteFile,
     };
     use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
     use windows_sys::Win32::System::Threading::CreateEventW;
@@ -208,6 +208,52 @@ mod ffi {
         Ok(widen(transferred))
     }
 
+    pub(crate) fn write(handle: &OwnedHandle, buf: &[u8]) -> Result<usize, Error> {
+        let len = dword(buf.len()).map_err(|_| {
+            Error::from_io(
+                Call::Write,
+                io::Error::new(io::ErrorKind::InvalidInput, "buffer longer than a DWORD"),
+            )
+        })?;
+        let event = create_event()?;
+        // SAFETY: `OVERLAPPED` is a C struct of integers and pointers. An all-zero pattern
+        // is a valid overlapped block with a null event, and the event is filled in next.
+        let mut overlapped = unsafe { std::mem::zeroed::<OVERLAPPED>() };
+        overlapped.hEvent = event.as_raw_handle();
+        let mut count = 0_u32;
+        let raw = handle.as_raw_handle();
+        // SAFETY: `raw` is the overlapped port, `buf` and `overlapped` and `count` stay
+        // valid until `GetOverlappedResult` has returned or this call completed at once.
+        // The event in `overlapped` stays open for that same span. `WriteFile` only reads
+        // `buf`.
+        let ok = unsafe {
+            WriteFile(
+                raw,
+                buf.as_ptr().cast(),
+                len,
+                &raw mut count,
+                &raw mut overlapped,
+            )
+        };
+        if ok != 0 {
+            return Ok(widen(count));
+        }
+        let error = io::Error::last_os_error();
+        if !is_pending(&error) {
+            return Err(Error::from_io(Call::Write, error));
+        }
+        let mut transferred = 0_u32;
+        // SAFETY: the write returned `ERROR_IO_PENDING`, which is not a failure.
+        // `overlapped` is the same block, `raw` is the same port, and `bWait` is true,
+        // so this returns only after the driver has finished with `buf`.
+        let ok =
+            unsafe { GetOverlappedResult(raw, &raw const overlapped, &raw mut transferred, 1) };
+        if ok == 0 {
+            return Err(Error::new(Call::Write));
+        }
+        Ok(widen(transferred))
+    }
+
     fn create_event() -> Result<OwnedHandle, Error> {
         // SAFETY: the security attributes and the name are null, so this creates an unnamed
         // auto-reset event that is not signaled. On success the handle is owned here.
@@ -258,6 +304,8 @@ pub enum Call {
     SetupComm,
     /// `ReadFile` or `GetOverlappedResult` failed.
     Read,
+    /// `WriteFile` or `GetOverlappedResult` failed.
+    Write,
     /// `CreateEventW` failed.
     Event,
 }
@@ -274,6 +322,7 @@ impl Call {
             Self::GetCommMask => "GetCommMask",
             Self::SetupComm => "SetupComm",
             Self::Read => "ReadFile",
+            Self::Write => "WriteFile",
             Self::Event => "CreateEvent",
         }
     }
@@ -434,6 +483,20 @@ impl Com {
     /// [`Call::Event`] when the overlapped event cannot be created.
     pub fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
         ffi::read(&self.handle, buf)
+    }
+
+    /// Write bytes.
+    ///
+    /// The overlapped write is waited out before this returns. `ERROR_IO_PENDING`
+    /// is not a failure: the wait is `GetOverlappedResult`. The count is how many
+    /// bytes the driver accepted, which can be less than `buf.len()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Call::Write`] when `WriteFile` or `GetOverlappedResult` fails, and
+    /// [`Call::Event`] when the overlapped event cannot be created.
+    pub fn write(&self, buf: &[u8]) -> Result<usize, Error> {
+        ffi::write(&self.handle, buf)
     }
 }
 

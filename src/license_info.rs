@@ -1,0 +1,303 @@
+//! The on-device license-info buffer.
+//!
+//! A stride of 8 bytes was parsed once and the product-name test failed; each record is 16 bytes.
+//! This module does not call a license server and does not write the buffer back.
+//!
+//! The buffer is `0xBEC` bytes. The serial is the raw 8 bytes at `+0x00`. Twelve bytes at
+//! `+0x08` are zero and unread. Two little-endian Unix timestamps follow: `issued` at
+//! `+0x14` and `updated` at `+0x18`. The period dword is at `+0x1C`. A displayed date is
+//! the UTC calendar day (`YYYY-MM-DD`). The header stamps also carry a time of day, which
+//! is not kept. `updated` is the stamp that moved from 2025-12-06 to 2026-11-20 between
+//! the two captures, so it is not an end date. The dword `3` at `+0x20` is unread.
+//!
+//! At `+0x64` there are 168 records of 16 bytes: an 8-byte name, a Unix timestamp, and a
+//! zero dword. The name is space-padded to 8 bytes. A NUL ends it earlier, and trailing
+//! spaces are padding. A row whose name is empty or whose timestamp is 0 is skipped. The
+//! tail at `+0xAE4` is 264 bytes of padding, `0x53` in the first capture and `0x38` in the
+//! later one, and it is not a row.
+
+const LEN: usize = 0xBEC;
+const ISSUED: usize = 0x14;
+const UPDATED: usize = 0x18;
+const PERIOD: usize = 0x1C;
+const PRODUCTS: usize = 0x64;
+const PRODUCT_END: usize = 0xAE4;
+const RECORD: usize = 16;
+const NAME: usize = 8;
+const DAY_SECONDS: u32 = 86_400;
+
+/// Why a license-info buffer was not parsed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LicenseInfoError {
+    /// The slice is not exactly `0xBEC` bytes.
+    Length,
+    /// A product name is not a UTF-8 C string.
+    Name,
+}
+
+impl std::fmt::Display for LicenseInfoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Length => "license info is not 0xBEC bytes",
+            Self::Name => "product name is not UTF-8",
+        })
+    }
+}
+
+impl std::error::Error for LicenseInfoError {}
+
+/// UTC calendar day of a little-endian Unix timestamp.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LicenseDate {
+    /// Year of that UTC day.
+    pub year: u16,
+    /// Month, from 1 through 12.
+    pub month: u8,
+    /// Day of the month, from 1 through 31.
+    pub day: u8,
+}
+
+impl std::fmt::Display for LicenseDate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:04}-{:02}-{:02}", self.year, self.month, self.day)
+    }
+}
+
+/// One product row whose name is nonempty and whose timestamp is nonzero.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Product {
+    /// The 8-byte name as UTF-8, without its trailing space padding.
+    pub name: String,
+    /// UTC day of the row's Unix timestamp.
+    pub date: LicenseDate,
+}
+
+/// The license fields read from the on-device buffer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LicenseInfo {
+    /// The raw 8 bytes at `+0x00`.
+    pub serial: [u8; 8],
+    /// UTC day of the Unix timestamp at `+0x14`.
+    pub issued: LicenseDate,
+    /// UTC day of the Unix timestamp at `+0x18`.
+    pub updated: LicenseDate,
+    /// The dword at `+0x1C`, `0x004F1A00` on the measured device.
+    pub period_seconds: u32,
+    /// Product rows from `+0x64`, in buffer order.
+    pub products: Vec<Product>,
+}
+
+/// Read the license from one on-device buffer.
+///
+/// # Errors
+///
+/// Returns [`LicenseInfoError::Length`] when `bytes` is not exactly `0xBEC` bytes,
+/// and [`LicenseInfoError::Name`] when a product name is not UTF-8.
+#[must_use = "a license that is parsed and dropped was not read"]
+pub fn parse_license_info(bytes: &[u8]) -> Result<LicenseInfo, LicenseInfoError> {
+    if bytes.len() != LEN {
+        return Err(LicenseInfoError::Length);
+    }
+    let mut serial = [0_u8; 8];
+    serial.copy_from_slice(&bytes[..8]);
+    let mut products = Vec::new();
+    for (index, record) in bytes[PRODUCTS..PRODUCT_END]
+        .chunks_exact(RECORD)
+        .enumerate()
+    {
+        let at = PRODUCTS + index * RECORD;
+        let stamp = u32_at(bytes, at + NAME);
+        if stamp == 0 {
+            continue;
+        }
+        let Some(name) = name_at(&record[..NAME])? else {
+            continue;
+        };
+        products.push(Product {
+            name,
+            date: unix_date(stamp),
+        });
+    }
+    Ok(LicenseInfo {
+        serial,
+        issued: unix_date(u32_at(bytes, ISSUED)),
+        updated: unix_date(u32_at(bytes, UPDATED)),
+        period_seconds: u32_at(bytes, PERIOD),
+        products,
+    })
+}
+
+const fn u32_at(bytes: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+}
+
+fn name_at(raw: &[u8]) -> Result<Option<String>, LicenseInfoError> {
+    let nul = raw.iter().position(|byte| *byte == 0).unwrap_or(raw.len());
+    let padded = &raw[..nul];
+    let end = padded
+        .iter()
+        .rposition(|byte| *byte != b' ')
+        .map_or(0, |index| index + 1);
+    let text = &padded[..end];
+    if text.is_empty() {
+        return Ok(None);
+    }
+    std::str::from_utf8(text)
+        .map(|name| Some(name.to_owned()))
+        .map_err(|_| LicenseInfoError::Name)
+}
+
+/// Howard Hinnant's `civil_from_days`, for a nonnegative Unix timestamp.
+fn unix_date(seconds: u32) -> LicenseDate {
+    let shifted_days = seconds / DAY_SECONDS + 719_468;
+    let era_index = shifted_days / 146_097;
+    let remainder = shifted_days - era_index * 146_097;
+    let year_within =
+        (remainder - remainder / 1_460 + remainder / 36_524 - remainder / 146_096) / 365;
+    let absolute_year = year_within + era_index * 400;
+    let ordinal = remainder - (365 * year_within + year_within / 4 - year_within / 100);
+    let slot = (5 * ordinal + 2) / 153;
+    let calendar_day = ordinal - (153 * slot + 2) / 5 + 1;
+    let calendar_month = if slot < 10 { slot + 3 } else { slot - 9 };
+    let calendar_year = absolute_year + u32::from(calendar_month <= 2);
+    LicenseDate {
+        year: u16::try_from(calendar_year).expect("unix year fits in u16"),
+        month: u8::try_from(calendar_month).expect("month fits in u8"),
+        day: u8::try_from(calendar_day).expect("day fits in u8"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LicenseDate, LicenseInfoError, parse_license_info};
+
+    const SERIAL: [u8; 8] = [0x4E, 0x43, 0x41, 0x47, 0x4D, 0x67, 0x8B, 0x28];
+    const ISSUED_STAMP: u32 = 0x650D_2EFA;
+    const UPDATED_STAMP: u32 = 0x6933_9FD3;
+    const PERIOD: u32 = 0x004F_1A00;
+    const PRODUCT_STAMP: u32 = 0x72BB_BA80;
+
+    fn padded_record(name: &[u8], stamp: u32) -> [u8; 16] {
+        let mut raw = [b' '; 16];
+        raw[..name.len()].copy_from_slice(name);
+        raw[8..12].copy_from_slice(&stamp.to_le_bytes());
+        raw[12..16].fill(0);
+        raw
+    }
+
+    fn buffer(records: &[[u8; 16]]) -> Vec<u8> {
+        let mut bytes = vec![0_u8; 0xBEC];
+        bytes[..8].copy_from_slice(&SERIAL);
+        bytes[0x14..0x18].copy_from_slice(&ISSUED_STAMP.to_le_bytes());
+        bytes[0x18..0x1C].copy_from_slice(&UPDATED_STAMP.to_le_bytes());
+        bytes[0x1C..0x20].copy_from_slice(&PERIOD.to_le_bytes());
+        for (index, record) in records.iter().enumerate() {
+            let at = 0x64 + index * 16;
+            bytes[at..at + 16].copy_from_slice(record);
+        }
+        bytes
+    }
+
+    fn day(year: u16, month: u8, day: u8) -> LicenseDate {
+        LicenseDate { year, month, day }
+    }
+
+    #[test]
+    fn header_stamps_display_as_utc_dates() {
+        let cases = [
+            (0x650D_2EFA_u32, "2023-09-22"),
+            (0x6933_9FD3_u32, "2025-12-06"),
+            (0x6B00_5C93_u32, "2026-11-20"),
+            (0x72BB_BA80_u32, "2030-12-31"),
+            (0x65DF_C900_u32, "2024-02-29"),
+            (0x65E1_1A80_u32, "2024-03-01"),
+            (0_u32, "1970-01-01"),
+            (86_400_u32, "1970-01-02"),
+        ];
+        for (stamp, text) in cases {
+            let mut bytes = buffer(&[]);
+            bytes[0x14..0x18].copy_from_slice(&stamp.to_le_bytes());
+            let info = parse_license_info(&bytes).unwrap();
+            assert_eq!(info.issued.to_string(), text);
+            assert_eq!(info.products, Vec::new());
+        }
+    }
+
+    #[test]
+    fn product_names_are_the_padded_rows() {
+        let bytes = buffer(&[
+            padded_record(b"PASSTHRU", PRODUCT_STAMP),
+            padded_record(b"PDU", PRODUCT_STAMP),
+            padded_record(b"GMGDS", PRODUCT_STAMP),
+            padded_record(b"GMT2WIN", PRODUCT_STAMP),
+            padded_record(b"_NA_NA_N", 0),
+            padded_record(b"   ", PRODUCT_STAMP),
+            padded_record(b"AB\0XXXX", PRODUCT_STAMP),
+        ]);
+        let info = parse_license_info(&bytes).unwrap();
+        assert_eq!(info.serial, SERIAL);
+        assert_eq!(info.issued.to_string(), "2023-09-22");
+        assert_eq!(info.updated.to_string(), "2025-12-06");
+        assert_eq!(info.period_seconds, 0x004F_1A00);
+        let names: Vec<&str> = info
+            .products
+            .iter()
+            .map(|product| product.name.as_str())
+            .collect();
+        assert_eq!(names, ["PASSTHRU", "PDU", "GMGDS", "GMT2WIN", "AB"]);
+        assert!(
+            info.products
+                .iter()
+                .all(|product| product.date == day(2030, 12, 31))
+        );
+        assert!(
+            info.products
+                .iter()
+                .all(|product| product.date.to_string() == "2030-12-31")
+        );
+    }
+
+    #[test]
+    fn a_buffer_that_is_not_the_device_length_is_refused() {
+        let full = buffer(&[]);
+        assert_eq!(
+            parse_license_info(&full[..full.len() - 1]),
+            Err(LicenseInfoError::Length)
+        );
+        assert_eq!(parse_license_info(&[]), Err(LicenseInfoError::Length));
+        let mut long = full;
+        long.push(0);
+        assert_eq!(parse_license_info(&long), Err(LicenseInfoError::Length));
+    }
+
+    #[test]
+    fn a_name_that_is_not_utf8_is_refused() {
+        let bytes = buffer(&[padded_record(&[0xFF], PRODUCT_STAMP)]);
+        assert_eq!(parse_license_info(&bytes), Err(LicenseInfoError::Name));
+    }
+
+    #[test]
+    fn the_device_buffer_names_four_products() {
+        let path = std::path::Path::new(r"D:\temp\vxdiag-re\fanout\license.bin");
+        if !path.is_file() {
+            return;
+        }
+        let bytes = std::fs::read(path).unwrap();
+        let info = parse_license_info(&bytes).unwrap();
+        assert_eq!(info.serial, SERIAL);
+        assert_eq!(info.issued.to_string(), "2023-09-22");
+        assert_eq!(info.updated.to_string(), "2025-12-06");
+        assert_eq!(info.period_seconds, 0x004F_1A00);
+        let names: Vec<&str> = info
+            .products
+            .iter()
+            .map(|product| product.name.as_str())
+            .collect();
+        assert_eq!(names, ["PASSTHRU", "PDU", "GMGDS", "GMT2WIN"]);
+        assert!(
+            info.products
+                .iter()
+                .all(|product| product.date.to_string() == "2030-12-31")
+        );
+    }
+}

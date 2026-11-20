@@ -17,11 +17,15 @@ for this layer.
   when the profile baud is 0.
 - Names the command headers the DLL writes, and reads a `GetInfo` reply into the six
   fields that function logs.
+- On Windows, writes one packed frame and reads the first reply.
+- Reads a firmware image header and says whether that file is newer than the running version.
+- Reads the license info already stored on the device.
 
 ## What it does not do
 
 - It does not speak SAE J2534. That document is not in `primarysource`, so `spskit` and `obd-bridge`
   do not grow a pass-through, and neither does this crate.
-- It does not call a license server or write firmware.
+- It does not call a license server, and it does not write firmware. The image compare stops
+  when the file is not newer. The license parser does not write the buffer back.
 - It does not read a vehicle module. A brake-module identity read is a later slice, after the port
   and the command set, and only with the car connected.

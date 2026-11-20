@@ -57,3 +57,31 @@ Those two offsets are in the copied bytes only when the payload is at least `0x3
 bytes, which is what this crate requires. The 72-byte COM4 reply of 2026-11-20 is
 that long. Its logged hardware name is `VCX-NANO`, the version is `1.9.4.2`, and
 the date is `2023-03-31`.
+
+## One exchange
+
+`exchange` packs the caller's header and payload, writes those bytes with overlapped
+`WriteFile`, and reads until the first buffer that [`unpack`](../src/frame.rs) accepts.
+`ERROR_IO_PENDING` is waited out. The port timeouts are left as the open set them, so an
+empty read returns at once and the wait is a 10 ms pause until the caller's deadline.
+On 2026-11-20 this wrote the empty `GetInfo` to COM4 and the reply was the same
+`VCX-NANO` / `1.9.4.2` block.
+
+## Firmware image header
+
+`VCXHexLoad` logs `Head.Format`, `Head.Name`, `Head.Version`, `Head.Key`, and
+`Head.PageNum`. Both shipped files, `vcx.bin` and `vcxa.bin`, start `A5 A5 A5 A5`.
+The version dword at offset `0x0C` is `0x01090100`, which is 1.9.1.0. The names are
+`VCX-Plus` and `VCX-At40`. `Head.PageNum` is 181 and 186. `file_is_newer` compares that
+dword with the running version. 1.9.1.0 is not newer than the dongle's 1.9.4.2, so this
+crate does not write an image.
+
+## License info on the device
+
+The on-device buffer is `0xBEC` bytes. The serial is the raw 8 bytes at the start.
+`issued` at `+0x14` and `updated` at `+0x18` are little-endian Unix timestamps, shown
+as the UTC calendar day. The period dword at `+0x1C` is `0x004F1A00`. From `+0x64`,
+each product row is 16 bytes: an 8-byte name, a Unix timestamp, and a zero dword.
+The four named rows are `PASSTHRU`, `PDU`, `GMGDS`, and `GMT2WIN`, each dated
+2030-12-31. This crate reads that buffer. It does not call a license server and it
+does not write the buffer back.
