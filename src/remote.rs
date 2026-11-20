@@ -238,9 +238,9 @@ fn get_text(url: &str, header: Option<&str>) -> Result<String, RemoteError> {
 
 #[cfg(windows)]
 fn get_bytes(url: &str, header: Option<&str>) -> Result<Vec<u8>, RemoteError> {
-    vcxcomm_open::http_get(url, header).map_err(|error| {
+    vcxtoolkit_open::http_get(url, header).map_err(|error| {
         RemoteError::Http(match error {
-            vcxcomm_open::HttpError::Status(status) => HttpFailure::Status(status),
+            vcxtoolkit_open::HttpError::Status(status) => HttpFailure::Status(status),
             _ => HttpFailure::Transport,
         })
     })

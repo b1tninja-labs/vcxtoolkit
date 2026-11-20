@@ -1,6 +1,6 @@
 # Instructions for coding agents
 
-`vcxcomm` is a Rust crate (edition 2024, MSRV 1.85). Read `docs/layout.md` before adding modules.
+`vcxtoolkit` is a Rust crate (edition 2024, MSRV 1.85). Read `docs/layout.md` before adding modules.
 
 ## Commands
 

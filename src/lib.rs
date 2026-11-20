@@ -51,6 +51,6 @@ pub const fn name() -> &'static str {
 mod tests {
     #[test]
     fn name_is_the_package_name() {
-        assert_eq!(super::name(), "vcxcomm");
+        assert_eq!(super::name(), "vcxtoolkit");
     }
 }

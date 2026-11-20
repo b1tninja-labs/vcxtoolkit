@@ -1,13 +1,13 @@
-# vcxcomm
+# vcxtoolkit
 
 The link to a VCX dongle, registered 2026-11-20. Untiered and unsequenced. It sits beside `spskit`,
 which downloads SPS modules and does not talk to the device.
 
 `vcxkit` and `vxkit` were the first names and were refused: both are free, and each is one keystroke
 from a live package (`voxkit` for `vcxkit`; `gxkit`, `rxkit`, `v2kit`, `vkit`, `vlkit`, `vokit`,
-`voxkit` and `wxkit` for `vxkit`). `vcxcomm` is free on PyPI and crates.io with no live one-keystroke
-neighbour (snapshot of 936,266 names, and crates.io, both 2026-11-20). It is the name the DLL uses
-for this layer.
+`voxkit` and `wxkit` for `vxkit`). The crate was registered as `vcxcomm`, which was free on PyPI and
+crates.io with no live one-keystroke neighbour (snapshot of 936,266 names, and crates.io, both
+2026-11-20), and renamed to `vcxtoolkit` the same day.
 
 ## What this slice does
 

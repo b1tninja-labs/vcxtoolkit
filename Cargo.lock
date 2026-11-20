@@ -3,14 +3,14 @@
 version = 4
 
 [[package]]
-name = "vcxcomm"
+name = "vcxtoolkit"
 version = "0.1.0"
 dependencies = [
- "vcxcomm-open",
+ "vcxtoolkit-open",
 ]
 
 [[package]]
-name = "vcxcomm-open"
+name = "vcxtoolkit-open"
 version = "0.1.0"
 dependencies = [
  "windows-sys",

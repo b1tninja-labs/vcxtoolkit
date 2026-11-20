@@ -1,4 +1,4 @@
-# Contributing to vcxcomm
+# Contributing to vcxtoolkit
 
 1. Install Rust with `rustup`; `rust-toolchain.toml` selects the stable channel and the components.
 2. Make a change with a test that fails without it.

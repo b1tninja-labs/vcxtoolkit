@@ -134,7 +134,7 @@ fn transport() -> HttpError {
 }
 
 fn open_session() -> Result<Internet, HttpError> {
-    let agent = wide("vcxcomm");
+    let agent = wide("vcxtoolkit");
     // SAFETY: `agent` is a NUL-terminated wide string and outlives the call. The
     // proxy name and bypass are null, which selects the automatic proxy.
     let raw = unsafe {

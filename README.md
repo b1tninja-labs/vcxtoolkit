@@ -1,10 +1,10 @@
-# vcxcomm
+# vcxtoolkit
 
 The serial frame a VCX dongle speaks: four header bytes, a payload, a checksum, and `0xBB` markers.
 
 `vcxkit` and `vxkit` are free on PyPI and crates.io, and each sits one keystroke from a live package
-(`voxkit`, and several others for `vxkit`). This name is the one the DLL uses for the same layer
-(`VCXCommSendFrame`, `VCXCommRecvFrame`).
+(`voxkit`, and several others for `vxkit`). The DLL names this layer `VCXComm` (`VCXCommSendFrame`,
+`VCXCommRecvFrame`). The crate was registered as `vcxcomm` and is now `vcxtoolkit`.
 
 Status: on Windows the crate opens the USB serial port and exchanges one frame. A live
 `GetInfo` on COM4 returned `VCX-NANO` and firmware `1.9.4.2`. A firmware image header can be
@@ -25,9 +25,9 @@ See `docs/sources.md`.
 ## Use
 
 ```rust
-let header = vcxcomm::Command::GetInfo.header(0);
-let wire = vcxcomm::pack(header, &[]).unwrap();
-let frame = vcxcomm::unpack(&wire).unwrap();
+let header = vcxtoolkit::Command::GetInfo.header(0);
+let wire = vcxtoolkit::pack(header, &[]).unwrap();
+let frame = vcxtoolkit::unpack(&wire).unwrap();
 assert!(frame.payload.is_empty());
 ```
 

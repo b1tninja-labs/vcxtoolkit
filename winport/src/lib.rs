@@ -1,6 +1,6 @@
 //! Win32 calls for the VCX USB serial open and the license and catalog GETs.
 //!
-//! `vcxcomm` forbids `unsafe`. `CreateFile`, the DCB, the timeouts, the event mask,
+//! `vcxtoolkit` forbids `unsafe`. `CreateFile`, the DCB, the timeouts, the event mask,
 //! the queue sizes, the overlapped read and write, and `WinHTTP` are FFI, so they live here.
 
 #![cfg(windows)]

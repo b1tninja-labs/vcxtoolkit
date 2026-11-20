@@ -90,8 +90,8 @@ fn attempts<T, E>(
 }
 
 #[cfg(windows)]
-fn to_line(setup: &Setup) -> vcxcomm_open::Line {
-    vcxcomm_open::Line {
+fn to_line(setup: &Setup) -> vcxtoolkit_open::Line {
+    vcxtoolkit_open::Line {
         baud: setup.baud,
         byte_size: setup.byte_size,
         parity: setup.parity,
@@ -108,13 +108,13 @@ fn to_line(setup: &Setup) -> vcxcomm_open::Line {
 }
 
 #[cfg(windows)]
-pub use vcxcomm_open::{Call, Error as OpenError, Snapshot as State};
+pub use vcxtoolkit_open::{Call, Error as OpenError, Snapshot as State};
 
 /// An open USB serial port. Dropping it closes the handle.
 #[cfg(windows)]
 #[derive(Debug)]
 pub struct Port {
-    com: vcxcomm_open::Com,
+    com: vcxtoolkit_open::Com,
 }
 
 #[cfg(windows)]
@@ -167,7 +167,7 @@ impl Port {
 pub fn open_usb(port: u32, baud: u32) -> Result<Port, OpenError> {
     let path = device_path(port);
     let com = attempts(
-        || vcxcomm_open::Com::open(&path),
+        || vcxtoolkit_open::Com::open(&path),
         || std::thread::sleep(Duration::from_millis(OPEN_RETRY_MS)),
     )?;
     let line = to_line(&usb_setup(baud));
