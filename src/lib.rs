@@ -5,6 +5,8 @@
 //! It packs and unpacks one frame, names the command headers, and reads the `GetInfo`
 //! fields the DLL logs. It reads a firmware image header and compares it with the
 //! running version, and it reads the license info already stored on the device.
+//! The license key's second half is the challenge reply raised to the secret
+//! that produced the nonce.
 //! It retrieves a license from the license service and the firmware image the
 //! catalog lists for a device. An image is an update only when it is newer than
 //! the running version. `read_pages` walks the packed page records in that image.
@@ -56,8 +58,10 @@ pub use image::{
 pub use info::{DeviceInfo, FirmwareDate, InfoError, device_info};
 pub use license_info::{
     LICENSE_CIPHER, LicenseDate, LicenseInfo, LicenseInfoError, Product, decrypt_license,
-    parse_license_info,
+    license_key, license_key_half, license_nonce, parse_license_info,
 };
+#[cfg(windows)]
+pub use license_info::{LicenseReadError, read_license};
 pub use remote::{
     FIRMWARE_CATALOG, HttpFailure, LICENSE_SERVER, RemoteError, auth_url, decode_license,
     license_url,

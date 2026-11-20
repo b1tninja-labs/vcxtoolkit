@@ -15,6 +15,10 @@
 //! spaces are padding. A row whose name is empty or whose timestamp is 0 is skipped. The
 //! tail at `+0xAE4` is 264 bytes of padding, `0x53` in the first capture and `0x38` in the
 //! later one, and it is not a row.
+//!
+//! The decipher key's second half is the eight-byte `80 00 A0 00` reply raised
+//! to the same secret that produced the request payload as `5^secret`, both
+//! modulo `2^64 - 59`.
 
 const LEN: usize = 0xBEC;
 const ISSUED: usize = 0x14;
@@ -140,8 +144,8 @@ const ROUND: u32 = 0x61C8_8647;
 
 /// Decipher the `0xBFC`-byte body of a `GetLicense` reply.
 ///
-/// The key is the raw 8-byte serial followed by the 8 bytes ordinal 21 stores
-/// beside it. The plain text is the on-device buffer.
+/// The key is the raw 8-byte serial followed by [`license_key_half`].
+/// The plain text is the on-device buffer.
 ///
 /// # Errors
 ///
@@ -154,6 +158,170 @@ pub fn decrypt_license(body: &[u8], key: &[u8; 16]) -> Result<LicenseInfo, Licen
     let mut plain = body.to_vec();
     decipher(&mut plain, key);
     parse_license_info(&plain[..LEN])
+}
+
+/// `2^64 - 59`. The clear multiply at `0x7B2FB340` reduces by this.
+const MODULUS: u128 = (1_u128 << 64) - 59;
+
+/// Base of the nonce. Ordinal 21 raises this to the caller's secret.
+const GENERATOR: u64 = 5;
+
+/// Eight payload bytes for header `80 00 A0 00`.
+///
+/// The value is `5^secret` modulo `2^64 - 59`, written little-endian.
+/// `secret` is the caller's choice. The matching key half is
+/// [`license_key_half`] of the eight-byte reply.
+#[must_use]
+pub fn license_nonce(secret: u64) -> [u8; 8] {
+    mod_pow(GENERATOR, secret).to_le_bytes()
+}
+
+/// The eight key bytes stored beside the raw serial.
+///
+/// `reply` is the eight bytes after the status byte of the `80 00 A0 00`
+/// answer. The result is that integer, raised to `secret`, modulo
+/// `2^64 - 59`, written little-endian.
+#[must_use]
+pub fn license_key_half(secret: u64, reply: [u8; 8]) -> [u8; 8] {
+    mod_pow(u64::from_le_bytes(reply), secret).to_le_bytes()
+}
+
+/// The 16-byte decipher key: `serial`, then [`license_key_half`].
+#[must_use]
+pub fn license_key(serial: [u8; 8], secret: u64, reply: [u8; 8]) -> [u8; 16] {
+    let mut key = [0_u8; 16];
+    key[..8].copy_from_slice(&serial);
+    key[8..].copy_from_slice(&license_key_half(secret, reply));
+    key
+}
+
+fn mod_mul(left: u64, right: u64) -> u64 {
+    let product = u128::from(left) * u128::from(right);
+    u64::try_from(product % MODULUS).unwrap_or(0)
+}
+
+fn mod_pow(mut base: u64, mut exponent: u64) -> u64 {
+    let mut acc = 1_u64;
+    while exponent != 0 {
+        if exponent & 1 == 1 {
+            acc = mod_mul(acc, base);
+        }
+        base = mod_mul(base, base);
+        exponent >>= 1;
+    }
+    acc
+}
+
+/// Header `80 00 A0 00`. No clear export writes this byte.
+const CHALLENGE_HEADER: [u8; 4] = [0x80, 0x00, 0xA0, 0x00];
+
+/// The eight reply bytes after a leading status of `0x00`.
+fn challenge_reply(payload: &[u8]) -> Option<[u8; 8]> {
+    if payload.len() != 9 || payload.first() != Some(&0) {
+        return None;
+    }
+    let mut reply = [0_u8; 8];
+    reply.copy_from_slice(&payload[1..]);
+    Some(reply)
+}
+
+/// Raw serial at `DevInfo.Serial`, which is the license key's first half.
+fn raw_serial(frame: &crate::Frame) -> Option<[u8; 8]> {
+    if frame.header != crate::Command::GetInfo.header(0) {
+        return None;
+    }
+    let start = 1 + 0x10;
+    let end = start + 8;
+    if frame.payload.len() < end {
+        return None;
+    }
+    let mut serial = [0_u8; 8];
+    serial.copy_from_slice(&frame.payload[start..end]);
+    Some(serial)
+}
+
+/// Why [`read_license`] did not return the on-device buffer.
+#[cfg(windows)]
+#[derive(Debug)]
+pub enum LicenseReadError {
+    /// The port exchange failed.
+    Exchange(crate::ExchangeError),
+    /// The `GetInfo` reply did not hold the raw serial.
+    Info,
+    /// The `80 00 A0 00` reply was not a zero status and eight bytes.
+    Challenge,
+    /// The `GetLicense` body did not decipher.
+    License(LicenseInfoError),
+}
+
+#[cfg(windows)]
+impl std::fmt::Display for LicenseReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Exchange(error) => write!(f, "{error}"),
+            Self::Info => f.write_str("GetInfo reply does not contain the raw serial"),
+            Self::Challenge => f.write_str("challenge reply is not a status byte and eight bytes"),
+            Self::License(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+#[cfg(windows)]
+impl std::error::Error for LicenseReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Exchange(error) => Some(error),
+            Self::License(error) => Some(error),
+            Self::Info | Self::Challenge => None,
+        }
+    }
+}
+
+/// Read the on-device license.
+///
+/// Sends `GetInfo`, then header `80 00 A0 00` with [`license_nonce`] of a
+/// fresh secret, then empty `GetLicense`. The decipher key is the raw serial
+/// plus [`license_key_half`] of the challenge reply. Nothing is written.
+///
+/// # Errors
+///
+/// Returns [`LicenseReadError::Exchange`] when a frame is not exchanged,
+/// [`LicenseReadError::Info`] when the serial is missing,
+/// [`LicenseReadError::Challenge`] when the middle reply is not eight bytes
+/// after a zero status, and [`LicenseReadError::License`] when the ciphertext
+/// does not decipher.
+#[cfg(windows)]
+#[must_use = "a license that is read and dropped was not shown"]
+pub fn read_license(
+    port: &crate::Port,
+    timeout: std::time::Duration,
+) -> Result<LicenseInfo, LicenseReadError> {
+    let info = crate::exchange(port, crate::Command::GetInfo.header(0), &[], timeout)
+        .map_err(LicenseReadError::Exchange)?;
+    let serial = raw_serial(&info).ok_or(LicenseReadError::Info)?;
+    let secret = fresh_secret();
+    let reply = crate::exchange(port, CHALLENGE_HEADER, &license_nonce(secret), timeout)
+        .map_err(LicenseReadError::Exchange)?;
+    if reply.header != CHALLENGE_HEADER {
+        return Err(LicenseReadError::Challenge);
+    }
+    let scalar = challenge_reply(&reply.payload).ok_or(LicenseReadError::Challenge)?;
+    let body = crate::exchange(port, crate::Command::GetLicense.header(0), &[], timeout)
+        .map_err(LicenseReadError::Exchange)?;
+    if body.payload.len() != 1 + LICENSE_CIPHER {
+        return Err(LicenseReadError::License(LicenseInfoError::Cipher));
+    }
+    decrypt_license(&body.payload[1..], &license_key(serial, secret, scalar))
+        .map_err(LicenseReadError::License)
+}
+
+#[cfg(windows)]
+fn fresh_secret() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1_u128, |elapsed| elapsed.as_nanos());
+    let mixed = u64::try_from(nanos & u128::from(u64::MAX)).unwrap_or(1);
+    if mixed == 0 { 1 } else { mixed }
 }
 
 fn decipher(body: &mut [u8], key: &[u8; 16]) {
@@ -398,5 +566,75 @@ mod tests {
         let info = super::decrypt_license(&body, &key).unwrap();
         let stored = parse_license_info(&std::fs::read(plain).unwrap()).unwrap();
         assert_eq!(info, stored);
+    }
+
+    #[test]
+    fn the_key_half_is_the_reply_raised_to_the_secret() {
+        let odd_secret = 0xD575_0455_4A18_67C1;
+        let odd_reply = 0x72F9_709F_9968_7849_u64.to_le_bytes();
+        assert_eq!(
+            super::license_nonce(odd_secret),
+            0xFEFF_81F9_5FA6_6669_u64.to_le_bytes()
+        );
+        assert_eq!(
+            super::license_key_half(odd_secret, odd_reply),
+            0x2F1E_32FC_07CD_9A56_u64.to_le_bytes()
+        );
+        let even_secret = 0x9CD1_CB84_59B8_154E;
+        let even_reply = 0x0993_06D4_B8C3_6817_u64.to_le_bytes();
+        assert_eq!(
+            super::license_nonce(even_secret),
+            0x3617_08AD_52FF_5E31_u64.to_le_bytes()
+        );
+        assert_eq!(
+            super::license_key_half(even_secret, even_reply),
+            0x688A_B093_57B8_3BD4_u64.to_le_bytes()
+        );
+        let mut key = [0_u8; 16];
+        key[..8].copy_from_slice(&SERIAL);
+        key[8..].copy_from_slice(&super::license_key_half(even_secret, even_reply));
+        assert_eq!(super::license_key(SERIAL, even_secret, even_reply), key);
+    }
+
+    #[test]
+    fn a_secret_of_one_sends_the_generator() {
+        assert_eq!(super::license_nonce(1), 5_u64.to_le_bytes());
+        assert_eq!(super::license_nonce(0), 1_u64.to_le_bytes());
+        assert_eq!(
+            super::license_key_half(0, 5_u64.to_le_bytes()),
+            1_u64.to_le_bytes()
+        );
+    }
+
+    #[test]
+    fn the_challenge_reply_is_a_zero_status_and_eight_bytes() {
+        assert_eq!(
+            super::challenge_reply(&[0, 1, 2, 3, 4, 5, 6, 7, 8]),
+            Some([1, 2, 3, 4, 5, 6, 7, 8])
+        );
+        assert_eq!(super::challenge_reply(&[1, 1, 2, 3, 4, 5, 6, 7, 8]), None);
+        assert_eq!(super::challenge_reply(&[0, 1, 2, 3, 4, 5, 6, 7]), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "needs the CH343 dongle on COM4"]
+    fn com4_reads_the_four_products() {
+        let port = crate::open_usb(4, 0).expect("COM4");
+        let info = super::read_license(&port, std::time::Duration::from_secs(3)).expect("license");
+        assert_eq!(info.serial, SERIAL);
+        assert_eq!(info.issued.to_string(), "2023-09-22");
+        assert_eq!(info.period_seconds, 0x004F_1A00);
+        let names: Vec<&str> = info
+            .products
+            .iter()
+            .map(|product| product.name.as_str())
+            .collect();
+        assert_eq!(names, ["PASSTHRU", "PDU", "GMGDS", "GMT2WIN"]);
+        assert!(
+            info.products
+                .iter()
+                .all(|product| product.date.to_string() == "2030-12-31")
+        );
     }
 }

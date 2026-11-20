@@ -98,11 +98,12 @@ Two clear helpers sit just after that decipher. `0x7B2FB340` multiplies two
 64-bit values modulo `2^64 - 59`. `0x7B2FB400` raises a 64-bit base to a
 64-bit exponent in that same modulus, by squaring on the way down and
 multiplying the base back in when the exponent bit is set. Ordinal 21 calls
-the exponentiation once. The base is the eight-byte `0xA0` reply, read as a
-little-endian integer. It then squares that result with `0x7B2FB340`. The
-eight key bytes stored afterward are not that square, and the exponent is not
-the nonce. Both of those values are still produced by the virtualized
-handlers.
+it twice, with the secret shifted right by one. The first base is 5. The
+second base is the eight-byte `0xA0` reply, little-endian. After each result
+it squares, and when the secret is odd it multiplies the original base back
+in. The nonce is `5^secret` and the eight key bytes are `reply^secret`, both
+modulo `2^64 - 59`. `license_nonce` and `license_key_half` are those two
+values. Two live calls, one even secret and one odd secret, matched.
 
 ## License retrieve
 

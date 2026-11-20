@@ -5,8 +5,9 @@
 //! is `0x00` for the device commands and the caller's channel for the `VCX_PRO_*`
 //! commands. `VCX_PRO_GetComParam` and `VCX_PRO_Clear` log a name and do not write
 //! a header. `GetLicense` is the empty frame ordinal 21 sends last; that byte is
-//! not an immediate in the clear exports. Third bytes `0x44`, `0x46`, `0x81`,
-//! `0x82`, `0x84`, `0x87`, `0x91`, `0xF4`, and `0xF6` have no sender. `0x91` is
+//! not an immediate in the clear exports. The eight-byte frame before it is
+//! header `80 00 A0 00`. Third bytes `0x44`, `0x46`, `0x81`, `0x82`, `0x84`,
+//! `0x87`, `0x91`, `0xA0`, `0xF4`, and `0xF6` have no named sender. `0x91` is
 //! the `VCX_ERR_INVALID_CMD` return.
 
 /// One command header, named the way the DLL logs the sender.
@@ -271,7 +272,9 @@ mod tests {
 
     #[test]
     fn bytes_with_no_sender_are_unnamed() {
-        for code in [0x00, 0x44, 0x46, 0x81, 0x82, 0x84, 0x87, 0x91, 0xF4, 0xF6] {
+        for code in [
+            0x00, 0x44, 0x46, 0x81, 0x82, 0x84, 0x87, 0x91, 0xA0, 0xF4, 0xF6,
+        ] {
             assert_eq!(Command::from_byte(code), None, "{code:#x}");
         }
     }

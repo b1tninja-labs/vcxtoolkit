@@ -36,6 +36,8 @@ assert!(frame.payload.is_empty());
 
 `read_header` and `file_is_newer` take a firmware image and the running version.
 `parse_license_info` takes the `0xBEC`-byte buffer already on the device.
+`license_nonce` and `license_key_half` are the eight-byte challenge and the key half:
+`5^secret` and `reply^secret` modulo `2^64 - 59`.
 `parse_catalog` reads the catalog. `firmware_for` is the image listed for a device, and
 `newer_firmware` is that image only when it is newer.
 On Windows, `exchange` writes one packed frame and returns the first reply, `fetch_license`

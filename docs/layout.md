@@ -6,7 +6,7 @@
   `command` names the headers. `frame` packs one frame. `info` reads the logged `GetInfo`
   fields. `exchange` writes one frame and reads the reply. `image` reads a firmware header
   and the packed page records.
-  `license_info` reads the on-device license buffer. `catalog` reads the firmware catalog.
+  `license_info` reads the on-device license buffer and derives the key half. `catalog` reads the firmware catalog.
   `remote` retrieves a license and a catalog firmware image. `serial` opens the USB port.
   `dfu` builds the DFU payloads the DLL writes and rewrites a page in memory.
   `update` describes the firmware-update steps and refuses the ones that would be sent.
