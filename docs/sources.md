@@ -85,8 +85,14 @@ each product row is 16 bytes: an 8-byte name, a Unix timestamp, and a zero dword
 The four named rows are `PASSTHRU`, `PDU`, `GMGDS`, and `GMT2WIN`, each dated
 2030-12-31. The read frame is header `80 00 83 00` with an empty payload. The
 reply body is `0xBFC` ciphertext bytes, and `decrypt_license` applies the
-decipher at `0x7B2FB130`. The key's second eight bytes are still inside the
-virtualized ordinal. This crate does not write the buffer back.
+decipher at `0x7B2FB130`. Before that frame, ordinal 21 sends header
+`80 00 A0 00` and eight bytes. The reply is status `0x00`, eight bytes, and
+the low byte of the sum of the frame. The key's second half is written by the
+virtualized handlers at RVA `0x17E885` and `0x211B47` once that reply is on
+the VM stack. The clear function at `0x7B2F8680` stores eight bytes at the
+same slot and then calls `0x7B2FB460`, which jumps into section `.V0`; ordinal
+21 does not take that path. The 16 bytes after the `0xBEC` buffer begin
+`67 A5 67 A5`. This crate does not write the buffer back.
 
 ## License retrieve
 

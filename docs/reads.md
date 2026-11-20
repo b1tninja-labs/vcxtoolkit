@@ -51,7 +51,7 @@ These are already implemented. None of them is a vehicle module.
 | Read | Bytes | Who answers | Where it was recovered |
 |---|---|---|---|
 | `GetInfo` `0x8C` | Empty payload. Header `80 00 8C 00`. | The dongle. The logged fields are in [sources.md](sources.md). | `VCX_DEV_GetInfo`, and a live reply on 2026-11-20. |
-| On-device license | Ordinal 21's last frame is header `80 00 83 00` and an empty payload. The reply is one byte plus `0xBFC` ciphertext bytes. The key is the raw serial plus eight bytes stored inside the virtualized body. | The dongle. | `decrypt_license` turns that body into `parse_license_info`. The eight bytes are not recovered. |
+| On-device license | Ordinal 21 sends `GetInfo`, then header `80 00 A0 00` with eight payload bytes, then header `80 00 83 00` with an empty payload. The `0xA0` reply is status `0x00`, eight bytes, and a checksum. The `0x83` reply is one byte plus `0xBFC` ciphertext bytes. The key is the raw serial plus eight bytes stored after that reply. | The dongle. | `decrypt_license` turns the body into `parse_license_info`. The eight bytes are computed in the virtualized body and are not recovered. |
 | Firmware catalog | `GET https://www.vxdiag.net/managecenter/fws.xml`. Not a serial frame. | The server. | `FirmwareURL` in the manager. Implemented. |
 | Server license | `GET {LicenseServerURL}/devices/{id}/license`. The body field `result.license` is hex. On 2026-11-20 that hex was 4076 bytes. | The server. | The manager. Implemented. Not written back. |
 
@@ -262,7 +262,9 @@ protocol returns `0x0A`. Any other protocol returns 1. Both pass timeout
 ## What is still not a frame
 
 - The eight key bytes ordinal 21 stores beside the serial before it deciphers
-  the `GetLicense` reply. The empty `80 00 83 00` request is recovered. The
+  the `GetLicense` reply. The empty `80 00 83 00` request and the eight-byte
+  `80 00 A0 00` exchange are recovered. The bytes are not an xor, a sum, MD5,
+  SHA-256, XTEA, or this crate's XXTEA of the nonce and the reply. The
   ordinal 20 gate, the ordinal 22 write, and the `0xFF` erase are not.
 - The bytes `VCX_PRO_Recv` writes at PDU offset 6.
 - The third argument of `ProOpen`, beyond the protocol dword `open_code` returns.
