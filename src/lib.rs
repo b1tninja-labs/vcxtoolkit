@@ -41,12 +41,13 @@ pub use dfu::{
 #[cfg(windows)]
 pub use exchange::{ExchangeError, exchange};
 pub use forward::{
-    ChannelFields, ComRecord, FILTER_CLEAR, FILTER_PASS, FilterCopy, FilterRecord, ForwardError,
-    MAX_FORWARD, Periodic, START_MODE, TIMER_CLEAR, TIMER_PASS, TimerRecord, add_filter, add_timer,
-    baud_record, close_payload, config_records, copied_data, delivered_len, j1850_check,
-    lookup_record, open_code, open_payload, pdu_flags, periodic_timer, reply_protocol, rx_status,
-    send_payload, set_com_param, set_filter_payload, set_timer_payload, start_filter,
-    start_payload, stop_filter, stop_payload, stop_timer, uart_sum,
+    BATTERY_QUERY, BATTERY_SEED, ChannelFields, ComRecord, FILTER_CLEAR, FILTER_PASS, FilterCopy,
+    FilterRecord, ForwardError, MAX_FORWARD, Periodic, START_MODE, TIMER_CLEAR, TIMER_PASS,
+    TimerRecord, add_filter, add_timer, battery_reading, baud_record, close_payload,
+    config_records, copied_data, delivered_len, j1850_check, lookup_record, mixed_bit, open_code,
+    open_payload, pdu_flags, periodic_timer, reply_protocol, rx_status, send_payload,
+    set_com_param, set_filter_payload, set_timer_payload, start_filter, start_payload, stop_filter,
+    stop_payload, stop_timer, uart_sum,
 };
 pub use frame::{Frame, FrameError, MAX_PAYLOAD, checksum, pack, unpack};
 pub use image::{

@@ -177,6 +177,12 @@ appends the sum of the data bytes. A brake-module identity would be those copied
 bytes. This DLL does not contain them. The dongle is still the module that
 receives `VCX_PRO_Send`. An ECU sees the copy only if the dongle forwards offset 6.
 
+When the message protocol differs from the channel protocol, `FUN_10005df0`
+sets PDU bit 0 and logs `CAN_MIXED_FORMAT` only if channel `+0xa4` is set, the
+channel id is one of the ISO 15765 ids, and the message id is one of the raw
+CAN ids. Every other mismatch returns `0x15` and does not finish the copy.
+`mixed_bit` is that bit.
+
 Connect's `SetComParam` buffer is one record: count `1`, key `3`, value the
 caller's baud. `baud_record` is that record. `SetFilter`'s third argument is
 `1` on connect and `2` for `CLEAR_MSG_FILTERS`. `Start`'s third argument is
@@ -242,6 +248,14 @@ That is a theory of what a pass-through payload often is. It is not a layout fro
 this dongle, and it is not a frame to send. `$27` on that bench is a security
 seed and stays out of this plan.
 
+`READ_VBATT` writes 14000 and then calls `VCX_DEV_GetPinVol` with middle
+argument `0x10`. Success replaces 14000 with the first dword that call writes.
+Failure stores 0. `PassThruSetProgrammingVoltage` forwards the caller's pin
+and voltage to `VCX_DEV_SetPinVol` and adds no bytes of its own. `SET_PIN_USE`,
+`READ_PROG_VOLTAGE`, `CAN_SET_BTR`, and `FIVE_BAUD_INIT_NO_INV_KB2` return
+success and call no device function. `FIVE_BAUD_INIT` and `FAST_INIT` call
+helpers whose bytes were not recovered.
+
 ## What is still not a frame
 
 - The ordinal 21 request, the ordinal 20 gate, the ordinal 22 write, and the
@@ -251,7 +265,8 @@ seed and stays out of this plan.
   `ProStart` is `0` when connect calls it. `SetFilter` is `1` or `2`.
   `SetTimer` is `1` or `2`.
 - The caller's data bytes at a Send PDU's offset 6. The prefix, the flag map,
-  and the trailing check byte are packed. `copied_data` applies that rewrite.
+  the mixed-format bit, and the trailing check byte are packed.
+- The bytes `FIVE_BAUD_INIT` and `FAST_INIT` hand to the device.
 - The `0x800E` phase record when the pin word is not `0x060E`. The builder does not store it.
 - The boot-mode poll's starting count, the `WrSerial` pointer, and the indirect
   slots `[0x7B2FE0B4]` and `[0x7B2FE13C]`, which belong to the update in

@@ -27,6 +27,8 @@ pub enum ForwardError {
     Unrecovered,
     /// `SetFilter` and `SetTimer` copy `1` or `2`, and no other byte was recovered.
     Mode,
+    /// The message protocol is not the channel protocol, and mixed format does not apply.
+    ProtocolMismatch,
 }
 
 impl std::fmt::Display for ForwardError {
@@ -40,6 +42,7 @@ impl std::fmt::Display for ForwardError {
             Self::KeptBuffer => "this protocol has no SET_CONFIG builder",
             Self::Unrecovered => "a SET_CONFIG field was not recovered",
             Self::Mode => "SetFilter and SetTimer copy 1 or 2",
+            Self::ProtocolMismatch => "the message protocol is not accepted on this channel",
         })
     }
 }
@@ -885,6 +888,48 @@ pub fn pdu_flags(protocol: u32, tx_flags: u32) -> Result<u32, ForwardError> {
     Ok(flags)
 }
 
+/// The extra PDU bit `FUN_10005df0` sets when it logs `CAN_MIXED_FORMAT`.
+///
+/// `enabled` is channel `+0xa4` being nonzero. The channel id must be one of
+/// `6`, `0x8005`, `0x9280`, `0x8007`, `0x9380`, `0x8010`, `0x9500`, `0x10000`,
+/// and the message id one of `5`, `0x8004`, `0x9000`, `0x8008`, `0x9300`,
+/// `0x800f`, `0x9480`. A matching pair of ids adds nothing.
+///
+/// # Errors
+///
+/// Returns [`ForwardError::ProtocolMismatch`] when the ids differ and the
+/// mixed path does not apply. The pass-through then returns `0x15`.
+pub fn mixed_bit(channel: u32, message: u32, enabled: bool) -> Result<u32, ForwardError> {
+    if channel == message {
+        return Ok(0);
+    }
+    let channel_ok = matches!(
+        channel,
+        6 | 0x8005 | 0x9280 | 0x8007 | 0x9380 | 0x8010 | 0x9500 | 0x10000
+    );
+    let message_ok = matches!(
+        message,
+        5 | 0x8004 | 0x9000 | 0x8008 | 0x9300 | 0x800f | 0x9480
+    );
+    if enabled && channel_ok && message_ok {
+        Ok(1)
+    } else {
+        Err(ForwardError::ProtocolMismatch)
+    }
+}
+
+/// Dword `READ_VBATT` writes before `VCX_DEV_GetPinVol` replaces it.
+pub const BATTERY_SEED: u32 = 14_000;
+
+/// Middle argument of that `VCX_DEV_GetPinVol` call.
+pub const BATTERY_QUERY: u32 = 0x10;
+
+/// The dword `READ_VBATT` keeps. `None` is the device call failing, which stores 0.
+#[must_use]
+pub fn battery_reading(device_dword: Option<u32>) -> u32 {
+    device_dword.unwrap_or(0)
+}
+
 /// Bytes `FUN_10005df0` places at PDU offset 6.
 ///
 /// `strip_uart` means channel flag `0x200` is clear, so the UART sum is appended.
@@ -1013,12 +1058,13 @@ pub fn stop_timer(id: u8) -> TimerRecord {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChannelFields, ComRecord, FILTER_CLEAR, FILTER_PASS, FilterCopy, FilterRecord,
-        ForwardError, Periodic, TIMER_CLEAR, TIMER_PASS, TimerRecord, add_filter, add_timer,
-        baud_record, close_payload, config_records, copied_data, delivered_len, j1850_check,
-        lookup_record, open_code, open_payload, pdu_flags, periodic_timer, reply_protocol,
-        rx_status, send_payload, set_com_param, set_filter_payload, set_timer_payload,
-        start_filter, start_payload, stop_filter, stop_payload, stop_timer, uart_sum,
+        BATTERY_SEED, ChannelFields, ComRecord, FILTER_CLEAR, FILTER_PASS, FilterCopy,
+        FilterRecord, ForwardError, Periodic, TIMER_CLEAR, TIMER_PASS, TimerRecord, add_filter,
+        add_timer, battery_reading, baud_record, close_payload, config_records, copied_data,
+        delivered_len, j1850_check, lookup_record, mixed_bit, open_code, open_payload, pdu_flags,
+        periodic_timer, reply_protocol, rx_status, send_payload, set_com_param, set_filter_payload,
+        set_timer_payload, start_filter, start_payload, stop_filter, stop_payload, stop_timer,
+        uart_sum,
     };
 
     #[test]
@@ -1358,5 +1404,16 @@ mod tests {
             stopped,
             [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
         );
+    }
+
+    #[test]
+    fn a_raw_can_message_on_iso15765_sets_pdu_bit_0() {
+        assert_eq!(mixed_bit(6, 5, true), Ok(1));
+        assert_eq!(mixed_bit(6, 6, true), Ok(0));
+        assert_eq!(mixed_bit(0x10000, 0x800f, true), Ok(1));
+        assert_eq!(mixed_bit(6, 5, false), Err(ForwardError::ProtocolMismatch));
+        assert_eq!(mixed_bit(1, 5, true), Err(ForwardError::ProtocolMismatch));
+        assert_eq!(battery_reading(None), 0);
+        assert_eq!(BATTERY_SEED, 14_000);
     }
 }
