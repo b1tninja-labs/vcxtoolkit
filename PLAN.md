@@ -5,9 +5,7 @@ which downloads SPS modules and does not talk to the device.
 
 `vcxkit` and `vxkit` were the first names and were refused: both are free, and each is one keystroke
 from a live package (`voxkit` for `vcxkit`; `gxkit`, `rxkit`, `v2kit`, `vkit`, `vlkit`, `vokit`,
-`voxkit` and `wxkit` for `vxkit`). The crate was registered as `vcxcomm`, which was free on PyPI and
-crates.io with no live one-keystroke neighbour (snapshot of 936,266 names, and crates.io, both
-2026-11-20), and renamed to `vcxtoolkit` the same day.
+`voxkit` and `wxkit` for `vxkit`). This crate is `vcxtoolkit`.
 
 ## What this slice does
 
