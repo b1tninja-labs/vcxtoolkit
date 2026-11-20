@@ -189,10 +189,11 @@ module id is in those buffers.
 `config_records` builds. ISO 9141 multiplies the connect defaults by 500,
 1000, or 2000. ISO 15765 ends with key `0x23`, value `4`, and adds key
 `0x8001`, value `2`, when channel `+0x154` is not 0. A pin word of `0x060E`
-forces key `0x100` to 0. Protocol `0x800E` is not built: its phase value was
-not recovered, and a later `0x8405` record sits outside the count the packer
-sends. LIN has no builder, so the buffer already stored is sent again.
-`+0xa9` has no recovered connect default.
+forces key `0x100` to 0. Protocol `0x800E` stores key `0x100` as 0 when the pin word is `0x060E`.
+Any other pin word leaves that dword unchanged, so the record is not built.
+A later `0x8405` record sits outside the count the packer sends. LIN has no
+builder, so the buffer already stored is sent again. The connect default at
+`+0xa8` is a zero dword, which clears `+0xa9` too.
 
 ```mermaid
 flowchart LR
@@ -207,7 +208,8 @@ flowchart LR
 
 ## What a read copies back
 
-`VCX_PRO_Recv` at `0x7B2F58E0` is `jmp 0x7B73BB48`. Its body was not recovered.
+`VCX_PRO_Recv` at `0x7B2F58E0` is `jmp 0x7B73BB48`, and that address is in
+section `.V0`. The body was not recovered.
 `VCXPT32` calls it from the event callback `FUN_10006a40` when the callback's
 second argument is `1`. The PDU it returns is parsed by `FUN_10006070`: a
 little-endian flags dword at offset 0, a little-endian `u16` length at offset 4,
@@ -220,6 +222,11 @@ length is at least 2, and the UART protocols lose one when channel flag `0x200`
 is clear. A UART drop that leaves 0 is not queued. ISO 15765 keeps its bytes.
 PDU bit 0 rewrites protocols `6` and `0x10000` to `5`. The bytes at offset 6
 are still whatever `VCX_PRO_Recv` wrote.
+
+`periodic_timer` is the `AddTimer` record. The first copied tail is the
+byte-swapped flag dword and then the same data `copied_data` would place at
+PDU offset 6. The interval is stored times `0x3E8`. Stopping a timer sends a
+zero record whose slot is the id minus 1, and does not call `SetTimer`.
 
 `VCXPT32` resolves ordinals 20, 21, and 22 and never calls them. Ordinals
 `0x17`, `0x31`, `0x32`, and `0x33` are called from `PassThruOpen` and
@@ -245,7 +252,7 @@ seed and stays out of this plan.
   `SetTimer` is `1` or `2`.
 - The caller's data bytes at a Send PDU's offset 6. The prefix, the flag map,
   and the trailing check byte are packed. `copied_data` applies that rewrite.
-- The `0x800E` phase record, and the connect default of channel `+0xa9`.
+- The `0x800E` phase record when the pin word is not `0x060E`. The builder does not store it.
 - The boot-mode poll's starting count, the `WrSerial` pointer, and the indirect
   slots `[0x7B2FE0B4]` and `[0x7B2FE13C]`, which belong to the update in
   [protocol.md](protocol.md) and are not vehicle reads.

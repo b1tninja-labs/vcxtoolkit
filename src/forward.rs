@@ -422,7 +422,8 @@ const SCALE_2000: u32 = 2000;
 /// [`ChannelFields::new`] sets every field except [`baud`](Self::baud) to 0.
 /// Those zeros are empty caller fields, not a second set of device defaults.
 /// [`ChannelFields::apply_connect_defaults`] writes the defaults that were
-/// recovered. It does not write [`at_0xa9`](Self::at_0xa9).
+/// recovered. The store at `+0xa8` is a dword, so [`at_0xa9`](Self::at_0xa9)
+/// is cleared with it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ChannelFields {
     /// The caller's baud, channel `+0x14`.
@@ -461,7 +462,7 @@ pub struct ChannelFields {
     pub at_0x98: u32,
     /// Channel `+0xa8`.
     pub at_0xa8: u8,
-    /// Channel `+0xa9`. Its connect default was not recovered.
+    /// Channel `+0xa9`. The dword store at `+0xa8` clears it.
     pub at_0xa9: u8,
     /// Channel `+0xd8`.
     pub at_0xd8: u32,
@@ -479,6 +480,12 @@ pub struct ChannelFields {
     pub at_0xf8: u32,
     /// Channel `+0xfc`.
     pub at_0xfc: u32,
+    /// Channel `+0x11c`. The `0x8405` record uses it and sits outside the count.
+    pub at_0x11c: u32,
+    /// Channel `+0x13c`.
+    pub at_0x13c: u32,
+    /// Channel `+0x140`.
+    pub at_0x140: u32,
     /// Channel `+0x14c`. The config record uses its low byte.
     pub at_0x14c: u32,
     /// Channel `+0x154`. A nonzero value adds the tenth ISO 15765 record.
@@ -517,6 +524,9 @@ impl ChannelFields {
             at_0xf4: 0,
             at_0xf8: 0,
             at_0xfc: 0,
+            at_0x11c: 0,
+            at_0x13c: 0,
+            at_0x140: 0,
             at_0x14c: 0,
             at_0x154: 0,
         }
@@ -524,7 +534,7 @@ impl ChannelFields {
 
     /// Writes the defaults `FUN_10004c10` stores before `SET_CONFIG`.
     ///
-    /// `+0xa9` is left as it was.
+    /// The dword at `+0xa8` is 0, so `+0xa9` is 0 as well.
     pub fn apply_connect_defaults(&mut self, protocol: u32) {
         self.at_0x18 = 0;
         self.at_0x1c = 0;
@@ -534,6 +544,10 @@ impl ChannelFields {
         self.at_0x94 = 0;
         self.at_0x98 = 0;
         self.at_0xa8 = 0;
+        self.at_0xa9 = 0;
+        self.at_0x11c = 0x14;
+        self.at_0x13c = 100;
+        self.at_0x140 = 0;
         self.at_0x14c = 0;
         self.at_0x154 = 0;
         self.at_0x28 = 0x28;
@@ -655,15 +669,31 @@ fn iso15765(protocol: u32, fields: &ChannelFields) -> Vec<ComRecord> {
     records
 }
 
+fn tp20(fields: &ChannelFields) -> Result<Vec<ComRecord>, ForwardError> {
+    if u16::from_le_bytes([fields.at_0xa8, fields.at_0xa9]) != 0x060e {
+        return Err(ForwardError::Unrecovered);
+    }
+    Ok(vec![
+        baud_record(fields.baud),
+        rec(2, pin_pair(fields.at_0xa8, fields.at_0xa9)),
+        rec(0x100, 0),
+        rec(0x8401, scaled(fields.at_0x13c, SCALE_1000)),
+        rec(0x8403, scaled(fields.at_0x140, SCALE_1000)),
+    ])
+}
+
 /// The `SetComParam` records `FUN_10005840` builds.
 ///
-/// Protocol `0x800E` is refused: its phase record was not recovered, and the
-/// following `0x8405` record sits outside the count the packer sends.
+/// Protocol `0x800E` stores its phase record only when the pin word at `+0xa8`
+/// is `0x060E`. Otherwise that dword is left as it was, and this returns
+/// [`ForwardError::Unrecovered`]. The `0x8405` record is filled after the count
+/// and is not returned.
 ///
 /// # Errors
 ///
 /// Returns [`ForwardError::KeptBuffer`] when the pass-through has no builder
-/// for `protocol`, and [`ForwardError::Unrecovered`] for `0x800E`.
+/// for `protocol`, and [`ForwardError::Unrecovered`] for an `0x800E` phase that
+/// the builder does not store.
 pub fn config_records(
     protocol: u32,
     fields: &ChannelFields,
@@ -713,7 +743,7 @@ pub fn config_records(
             records.extend(uart_timing(fields).into_iter().take(7));
             records
         }
-        0x800e => return Err(ForwardError::Unrecovered),
+        0x800e => return tp20(fields),
         _ => return Err(ForwardError::KeptBuffer),
     })
 }
@@ -908,15 +938,87 @@ pub fn copied_data(protocol: u32, data: &[u8], strip_uart: bool) -> Result<Vec<u
     }
 }
 
+/// One periodic message, before `VCX_PRO_AddTimer` packs it.
+pub struct Periodic<'a> {
+    /// Timer slot. The returned id is this plus 1.
+    pub slot: u8,
+    /// `ulTimeInterval`. The record stores it times `0x3E8`.
+    pub interval: u32,
+    /// Channel protocol id. Selects the PDU rewrite.
+    pub protocol: u32,
+    /// Caller flag word. [`pdu_flags`] maps it.
+    pub tx_flags: u32,
+    /// Caller data. Longer than 12 bytes is refused.
+    pub data: &'a [u8],
+    /// Present when `ExtraDataIndex` is at least `DataSize`. Its length must match `data`.
+    pub extra: Option<&'a [u8]>,
+    /// Channel flag `0x200` is clear, so a UART sum is appended.
+    pub strip_uart: bool,
+}
+
+/// The `AddTimer` record `FUN_10007780` fills.
+///
+/// The first extra is the byte-swapped PDU flags followed by the copied data.
+/// A present `extra` clears bit `0x40` of the `0xC9` mark.
+///
+/// # Errors
+///
+/// Returns [`ForwardError::BadFilter`] when `data` is longer than 12 bytes,
+/// [`ForwardError::ShortCopy`] when `extra` is a different length, and the
+/// errors of [`copied_data`] and [`pdu_flags`].
+pub fn periodic_timer(message: &Periodic<'_>) -> Result<TimerRecord, ForwardError> {
+    if message.data.len() > 12 {
+        return Err(ForwardError::BadFilter);
+    }
+    let payload = copied_data(message.protocol, message.data, message.strip_uart)?;
+    let flags = pdu_flags(message.protocol, message.tx_flags)?;
+    let Ok(span) = u8::try_from(payload.len() + 4) else {
+        return Err(ForwardError::BadFilter);
+    };
+    let (mark, tail, tail_len) = if let Some(extra) = message.extra {
+        if extra.len() != message.data.len() {
+            return Err(ForwardError::ShortCopy);
+        }
+        let Ok(tail_len) = u8::try_from(message.data.len()) else {
+            return Err(ForwardError::BadFilter);
+        };
+        (0x89, extra.to_vec(), tail_len)
+    } else {
+        (0xc9, Vec::new(), 0)
+    };
+    let mut from_8 = flags.to_be_bytes().to_vec();
+    from_8.extend_from_slice(&payload);
+    Ok(TimerRecord {
+        first: [message.slot, mark, span, tail_len],
+        dword: message.interval.wrapping_mul(0x3e8).to_le_bytes(),
+        from_8,
+        from_0x18: tail,
+    })
+}
+
+/// The `AddTimer` record `FUN_10007a10` sends for one stopped id.
+///
+/// The stored slot is `id - 1`, wrapping the way a byte subtract does.
+/// `SetTimer` is not called.
+#[must_use]
+pub fn stop_timer(id: u8) -> TimerRecord {
+    TimerRecord {
+        first: [id.wrapping_sub(1), 0, 0, 0],
+        dword: [0; 4],
+        from_8: Vec::new(),
+        from_0x18: Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ChannelFields, ComRecord, FILTER_CLEAR, FILTER_PASS, FilterCopy, FilterRecord,
-        ForwardError, TIMER_CLEAR, TIMER_PASS, TimerRecord, add_filter, add_timer, baud_record,
-        close_payload, config_records, copied_data, delivered_len, j1850_check, lookup_record,
-        open_code, open_payload, pdu_flags, reply_protocol, rx_status, send_payload, set_com_param,
-        set_filter_payload, set_timer_payload, start_filter, start_payload, stop_filter,
-        stop_payload, uart_sum,
+        ForwardError, Periodic, TIMER_CLEAR, TIMER_PASS, TimerRecord, add_filter, add_timer,
+        baud_record, close_payload, config_records, copied_data, delivered_len, j1850_check,
+        lookup_record, open_code, open_payload, pdu_flags, periodic_timer, reply_protocol,
+        rx_status, send_payload, set_com_param, set_filter_payload, set_timer_payload,
+        start_filter, start_payload, stop_filter, stop_payload, stop_timer, uart_sum,
     };
 
     #[test]
@@ -1203,5 +1305,58 @@ mod tests {
         assert_eq!(set_timer_payload(TIMER_CLEAR).unwrap(), [2]);
         assert_eq!(set_filter_payload(0), Err(ForwardError::Mode));
         assert_eq!(set_timer_payload(0), Err(ForwardError::Mode));
+    }
+
+    #[test]
+    fn tp20_with_pin_word_0x060e_stores_phase_zero() {
+        let mut fields = ChannelFields::new(500_000);
+        fields.at_0xa9 = 0x11;
+        fields.apply_connect_defaults(0x800e);
+        assert_eq!(fields.at_0xa9, 0);
+        fields.at_0xa8 = 0x0e;
+        fields.at_0xa9 = 0x06;
+        let records = config_records(0x800e, &fields).unwrap();
+        assert_eq!(records.len(), 5);
+        assert_eq!(
+            records[2],
+            ComRecord {
+                key: 0x100,
+                value: 0
+            }
+        );
+        assert_eq!(
+            records[3],
+            ComRecord {
+                key: 0x8401,
+                value: 100_000
+            }
+        );
+    }
+
+    #[test]
+    fn a_periodic_iso15765_message_carries_the_swapped_flags() {
+        let record = periodic_timer(&Periodic {
+            slot: 0,
+            interval: 1,
+            protocol: 6,
+            tx_flags: 0x40,
+            data: &[0x22, 0xf1, 0x90],
+            extra: None,
+            strip_uart: false,
+        })
+        .unwrap();
+        let payload = add_timer(&[record]).unwrap();
+        assert_eq!(
+            payload,
+            [
+                0x01, 0x00, 0xc9, 0x07, 0x00, 0xe8, 0x03, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x22,
+                0xf1, 0x90,
+            ]
+        );
+        let stopped = add_timer(&[stop_timer(1)]).unwrap();
+        assert_eq!(
+            stopped,
+            [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        );
     }
 }

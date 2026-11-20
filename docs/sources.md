@@ -126,6 +126,8 @@ not send the update.
 `FUN_10005a20` chooses the `VCX_PRO_Open` dword. ISO 15765 is `0x8001`.
 `FUN_10006070` copies a reply PDU back out: flags, length, then the data, with
 the trailing-byte drops in [reads.md](reads.md). `FUN_10005840` builds the
-`SET_CONFIG` records, and `FUN_10005df0` rewrites the bytes at PDU offset 6.
+`SET_CONFIG` records, `FUN_10007780` fills an `AddTimer` record, and
+`FUN_10005df0` rewrites the bytes at PDU offset 6. `VCX_PRO_Recv` jumps into
+section `.V0`.
 The caller's data bytes are not in that DLL. `VCX_PRO_Recv` is still virtualized.
 SAE J2534 is not imported.
