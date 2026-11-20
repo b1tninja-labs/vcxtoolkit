@@ -253,8 +253,11 @@ argument `0x10`. Success replaces 14000 with the first dword that call writes.
 Failure stores 0. `PassThruSetProgrammingVoltage` forwards the caller's pin
 and voltage to `VCX_DEV_SetPinVol` and adds no bytes of its own. `SET_PIN_USE`,
 `READ_PROG_VOLTAGE`, `CAN_SET_BTR`, and `FIVE_BAUD_INIT_NO_INV_KB2` return
-success and call no device function. `FIVE_BAUD_INIT` and `FAST_INIT` call
-helpers whose bytes were not recovered.
+success and call no device function. `FIVE_BAUD_INIT` sends one caller byte with flags 8.
+`FAST_INIT` accepts the UART protocols `3`, `4`, `0x8002`, `0x8003`, `0x10003`,
+and `0x800b`, runs the normal copy, and sets flag `0x4`. A different message
+protocol returns `0x0A`. Any other protocol returns 1. Both pass timeout
+`0x3E8` to `VCX_PRO_Send`.
 
 ## What is still not a frame
 
@@ -266,7 +269,8 @@ helpers whose bytes were not recovered.
   `SetTimer` is `1` or `2`.
 - The caller's data bytes at a Send PDU's offset 6. The prefix, the flag map,
   the mixed-format bit, and the trailing check byte are packed.
-- The bytes `FIVE_BAUD_INIT` and `FAST_INIT` hand to the device.
+- The word `FIVE_BAUD_INIT` copies out of a queued message. That word is
+  whatever arrived, not a constant.
 - The `0x800E` phase record when the pin word is not `0x060E`. The builder does not store it.
 - The boot-mode poll's starting count, the `WrSerial` pointer, and the indirect
   slots `[0x7B2FE0B4]` and `[0x7B2FE13C]`, which belong to the update in

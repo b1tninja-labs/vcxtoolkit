@@ -29,6 +29,8 @@ pub enum ForwardError {
     Mode,
     /// The message protocol is not the channel protocol, and mixed format does not apply.
     ProtocolMismatch,
+    /// `FAST_INIT` returns this code and does not build a payload.
+    FastStatus(u8),
 }
 
 impl std::fmt::Display for ForwardError {
@@ -43,6 +45,7 @@ impl std::fmt::Display for ForwardError {
             Self::Unrecovered => "a SET_CONFIG field was not recovered",
             Self::Mode => "SetFilter and SetTimer copy 1 or 2",
             Self::ProtocolMismatch => "the message protocol is not accepted on this channel",
+            Self::FastStatus(_) => "FAST_INIT refuses the message",
         })
     }
 }
@@ -930,6 +933,50 @@ pub fn battery_reading(device_dword: Option<u32>) -> u32 {
     device_dword.unwrap_or(0)
 }
 
+/// Timeout both init helpers pass to `VCX_PRO_Send`.
+pub const INIT_WAIT: u32 = 0x3e8;
+
+/// The `FIVE_BAUD_INIT` payload. Flags are 8, the length is 1, and `byte` is the data.
+///
+/// The pass-through reads `byte` from the pointer at input `+4`. A null channel,
+/// output, or that pointer returns 4 and does not build this payload.
+#[must_use]
+pub fn five_baud_payload(byte: u8) -> [u8; 7] {
+    let mut payload = [0; 7];
+    payload[..4].copy_from_slice(&8_u32.to_be_bytes());
+    payload[5] = 1;
+    payload[6] = byte;
+    payload
+}
+
+/// The `FAST_INIT` payload. The normal UART copy is sent with PDU flag `0x4` set.
+///
+/// Accepted protocols are `3`, `4`, `0x8002`, `0x8003`, `0x10003`, and `0x800b`.
+/// A protocol outside that set returns 1. A message protocol that differs from
+/// the channel returns `0x0A`.
+///
+/// # Errors
+///
+/// Returns [`ForwardError::FastStatus`] for those two refusals, and the errors
+/// of [`pdu_flags`] and [`copied_data`].
+pub fn fast_init(
+    channel: u32,
+    message: u32,
+    tx_flags: u32,
+    data: &[u8],
+    strip_uart: bool,
+) -> Result<Vec<u8>, ForwardError> {
+    if channel != message {
+        return Err(ForwardError::FastStatus(0x0a));
+    }
+    if !matches!(channel, 3 | 4 | 0x8002 | 0x8003 | 0x800b | 0x10003) {
+        return Err(ForwardError::FastStatus(1));
+    }
+    let flags = pdu_flags(channel, tx_flags)? | 4;
+    let payload = copied_data(channel, data, strip_uart)?;
+    send_payload(flags, &payload)
+}
+
 /// Bytes `FUN_10005df0` places at PDU offset 6.
 ///
 /// `strip_uart` means channel flag `0x200` is clear, so the UART sum is appended.
@@ -1059,12 +1106,12 @@ pub fn stop_timer(id: u8) -> TimerRecord {
 mod tests {
     use super::{
         BATTERY_SEED, ChannelFields, ComRecord, FILTER_CLEAR, FILTER_PASS, FilterCopy,
-        FilterRecord, ForwardError, Periodic, TIMER_CLEAR, TIMER_PASS, TimerRecord, add_filter,
-        add_timer, battery_reading, baud_record, close_payload, config_records, copied_data,
-        delivered_len, j1850_check, lookup_record, mixed_bit, open_code, open_payload, pdu_flags,
-        periodic_timer, reply_protocol, rx_status, send_payload, set_com_param, set_filter_payload,
-        set_timer_payload, start_filter, start_payload, stop_filter, stop_payload, stop_timer,
-        uart_sum,
+        FilterRecord, ForwardError, INIT_WAIT, Periodic, TIMER_CLEAR, TIMER_PASS, TimerRecord,
+        add_filter, add_timer, battery_reading, baud_record, close_payload, config_records,
+        copied_data, delivered_len, fast_init, five_baud_payload, j1850_check, lookup_record,
+        mixed_bit, open_code, open_payload, pdu_flags, periodic_timer, reply_protocol, rx_status,
+        send_payload, set_com_param, set_filter_payload, set_timer_payload, start_filter,
+        start_payload, stop_filter, stop_payload, stop_timer, uart_sum,
     };
 
     #[test]
@@ -1415,5 +1462,31 @@ mod tests {
         assert_eq!(mixed_bit(1, 5, true), Err(ForwardError::ProtocolMismatch));
         assert_eq!(battery_reading(None), 0);
         assert_eq!(BATTERY_SEED, 14_000);
+    }
+
+    #[test]
+    fn five_baud_is_one_byte_under_flag_8() {
+        assert_eq!(
+            five_baud_payload(0x33),
+            [0x00, 0x00, 0x00, 0x08, 0x00, 0x01, 0x33]
+        );
+        assert_eq!(INIT_WAIT, 0x3e8);
+    }
+
+    #[test]
+    fn fast_init_sets_flag_4_and_appends_the_uart_sum() {
+        let payload = fast_init(3, 3, 0, &[0x01, 0x02, 0x03], true).unwrap();
+        assert_eq!(
+            payload,
+            [0x00, 0x00, 0x00, 0x04, 0x00, 0x04, 0x01, 0x02, 0x03, 0x06]
+        );
+        assert_eq!(
+            fast_init(3, 4, 0, &[0], false),
+            Err(ForwardError::FastStatus(0x0a))
+        );
+        assert_eq!(
+            fast_init(6, 6, 0, &[0], false),
+            Err(ForwardError::FastStatus(1))
+        );
     }
 }
