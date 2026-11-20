@@ -1,9 +1,13 @@
-//! Win32 calls for the VCX USB serial open.
+//! Win32 calls for the VCX USB serial open and the license and catalog GETs.
 //!
 //! `vcxcomm` forbids `unsafe`. `CreateFile`, the DCB, the timeouts, the event mask,
-//! the queue sizes, and the overlapped read and write are FFI, so they live here.
+//! the queue sizes, the overlapped read and write, and `WinHTTP` are FFI, so they live here.
 
 #![cfg(windows)]
+
+mod http;
+
+pub use http::{HttpError, http_get};
 
 use std::io;
 use std::os::windows::io::OwnedHandle;

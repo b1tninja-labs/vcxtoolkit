@@ -5,24 +5,37 @@
 //! It packs and unpacks one frame, names the command headers, and reads the `GetInfo`
 //! fields the DLL logs. It reads a firmware image header and compares it with the
 //! running version, and it reads the license info already stored on the device.
+//! It retrieves a license from the license service and a firmware image from the
+//! catalog when that image is newer than the running version.
 //! On Windows it opens the USB serial port and exchanges one frame.
-//! It does not write firmware, call a license server, or program a vehicle.
+//! It does not write the license or the firmware to the device, and it does not
+//! program a vehicle.
 
+mod catalog;
 mod command;
 mod exchange;
 mod frame;
+mod hash;
 mod image;
 mod info;
 mod license_info;
+mod remote;
 mod serial;
 
+pub use catalog::{FirmwareItem, newer_firmware, parse_catalog};
 pub use command::{Command, pro_send_header};
 #[cfg(windows)]
 pub use exchange::{ExchangeError, exchange};
 pub use frame::{Frame, FrameError, MAX_PAYLOAD, checksum, pack, unpack};
-pub use image::{ImageError, ImageHeader, file_is_newer, read_header};
+pub use image::{ImageError, ImageHeader, file_is_newer, read_header, version_is_newer};
 pub use info::{DeviceInfo, FirmwareDate, InfoError, device_info};
 pub use license_info::{LicenseDate, LicenseInfo, LicenseInfoError, Product, parse_license_info};
+pub use remote::{
+    FIRMWARE_CATALOG, HttpFailure, LICENSE_SERVER, RemoteError, auth_url, decode_license,
+    license_url,
+};
+#[cfg(windows)]
+pub use remote::{fetch_license, fetch_newer_firmware};
 pub use serial::USB_BAUD;
 #[cfg(windows)]
 pub use serial::{Call, OpenError, Port, State, open_usb};

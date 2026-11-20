@@ -107,15 +107,23 @@ pub fn read_header(bytes: &[u8]) -> Result<ImageHeader, ImageError> {
     })
 }
 
+/// `true` when `file` is a greater version dword than `device`.
+///
+/// Both arrays are in log order, the same order as `DeviceInfo.fw_version`.
+/// The compare is the unsigned dword that logs `Device FwVersion is New!`.
+/// 1.9.1.0 is not newer than 1.9.4.2.
+#[must_use]
+pub fn version_is_newer(file: [u8; 4], device: [u8; 4]) -> bool {
+    u32::from_be_bytes(file) > u32::from_be_bytes(device)
+}
+
 /// `true` when the file version dword is greater than `device`.
 ///
 /// `device` is four version bytes in log order, the same order as
-/// `DeviceInfo.fw_version` and [`ImageHeader::version`]. The compare is that
-/// unsigned dword, the one that logs `Device FwVersion is New!`. 1.9.1.0 is not
-/// newer than 1.9.4.2.
+/// [`ImageHeader::version`].
 #[must_use]
 pub fn file_is_newer(file: &ImageHeader, device: [u8; 4]) -> bool {
-    u32::from_be_bytes(file.version) > u32::from_be_bytes(device)
+    version_is_newer(file.version, device)
 }
 
 #[cfg(test)]

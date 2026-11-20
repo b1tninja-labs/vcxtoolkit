@@ -9,7 +9,7 @@ dongle on COM4, a WCH CH343 (`USB\VID_1A86&PID_55D3`). The `GetInfo` request is 
 byte in that answer matches the sum this crate computes. The echo frame in the DLL, header
 `80 00 80 00` and payload `TEST`, matches as well.
 
-What is deliberately not in this crate: the license session, the firmware write, and the
+What is deliberately not in this crate: the license write, the firmware write, and the
 pass-through.
 
 ## The USB open
@@ -83,5 +83,24 @@ The on-device buffer is `0xBEC` bytes. The serial is the raw 8 bytes at the star
 as the UTC calendar day. The period dword at `+0x1C` is `0x004F1A00`. From `+0x64`,
 each product row is 16 bytes: an 8-byte name, a Unix timestamp, and a zero dword.
 The four named rows are `PASSTHRU`, `PDU`, `GMGDS`, and `GMT2WIN`, each dated
-2030-12-31. This crate reads that buffer. It does not call a license server and it
-does not write the buffer back.
+2030-12-31. This crate reads that buffer. It does not write the buffer back.
+
+## License retrieve
+
+The license service base is `LicenseServerURL`, `https://api.vxdiag.net/v1`. Auth is
+`GET {base}/auth` with the query the session builder assembles: the app id piece, the
+timestamp piece, the decimal Unix time, and `sign`. The signature is SHA-256 of that
+material, written as standard base64, with `+` replaced by `%2B`. The license request
+is `GET {base}/devices/{id}/license` with header `Authorization: authcode`. The id is
+the logged serial. The body field `result.license` is hex. On 2026-11-20 that hex
+decoded to 4076 bytes. Those bytes are what ordinal 22 writes. This crate downloads
+them. It does not send ordinal 20 or ordinal 22, and it does not send the `0xFF` erase.
+
+## Firmware catalog
+
+The catalog is `FirmwareURL`, `https://www.vxdiag.net/managecenter/fws.xml`. Each
+`ITEM` has `PID`, `VERSION`, `SIZE`, `MD5`, and `URL`. A file is an update only when
+its PID list contains the device and its version dword is greater than the running
+version. On 2026-11-20 the row for PIDs 836, 837, 843, and 844 was VCIA 1.9.4.2,
+the same version this dongle is running, so nothing was downloaded. The VCI row at
+1.9.6.0 is the other PID set. This crate does not call ordinal `0x27`.
