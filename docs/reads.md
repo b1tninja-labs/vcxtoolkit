@@ -132,7 +132,8 @@ sequence and nothing past it:
    are not. Those unrecovered bytes are the ones a vehicle ECU would see, and
    only if the dongle forwards them. Which ECU, and which request, is not in
    `VCX.dll` or `ManagerCenter.exe`.
-4. `VCX_PRO_Recv` for the reply. Not recovered.
+4. `VCX_PRO_Recv` for the reply. The export is virtualized. The copy out of
+   its PDU is recovered and is below.
 5. `ProStop` and `ProClose`, empty payloads, the dongle.
 
 Step 3 is the open row. It stays open because the inner bytes are not recovered.
@@ -173,6 +174,47 @@ appends the sum of the data bytes. A brake-module identity would be those copied
 bytes. This DLL does not contain them. The dongle is still the module that
 receives `VCX_PRO_Send`. An ECU sees the copy only if the dongle forwards offset 6.
 
+Connect's `SetComParam` buffer is one record: count `1`, key `3`, value the
+caller's baud. `baud_record` is that record. `SetFilter`'s third argument is
+[`FILTER_PASS`](../src/forward.rs) (`1`) on connect and `2` for
+`CLEAR_MSG_FILTERS`. `Start`'s third argument is `0`, and protocols
+`0x8000` through `0x8011` and `0x80000002` skip that call. `AddFilter` copies
+the caller's pattern, mask, and flow-control bytes. No constant module id is
+in those buffers.
+
+```mermaid
+flowchart LR
+  app["caller data bytes"] --> write["PassThruWriteMsgs"]
+  write --> pdu["PDU flags, length, offset 6"]
+  pdu --> send["VCX_PRO_Send"]
+  send --> dongle["dongle"]
+  dongle --> recv["VCX_PRO_Recv, body not recovered"]
+  recv --> back["FUN_10006070 copies the PDU"]
+  back --> read["PassThruReadMsgs"]
+```
+
+## What a read copies back
+
+`VCX_PRO_Recv` at `0x7B2F58E0` is `jmp 0x7B73BB48`. Its body was not recovered.
+`VCXPT32` calls it from the event callback `FUN_10006a40` when the callback's
+second argument is `1`. The PDU it returns is parsed by `FUN_10006070`: a
+little-endian flags dword at offset 0, a little-endian `u16` length at offset 4,
+and that many bytes at offset 6. `PassThruReadMsgs` then copies one queued
+record. It does not call `VCX_PRO_Recv` itself.
+
+`rx_status` is the flag map. `delivered_len` is the trailing-byte drop:
+protocols `1` and `0x8000` lose one byte, `2` and `0x8001` lose two when the
+length is at least 2, and the UART protocols lose one when channel flag `0x200`
+is clear. A UART drop that leaves 0 is not queued. ISO 15765 keeps its bytes.
+PDU bit 0 rewrites protocols `6` and `0x10000` to `5`. The bytes at offset 6
+are still whatever `VCX_PRO_Recv` wrote.
+
+`VCXPT32` resolves ordinals 20, 21, and 22 and never calls them. Ordinals
+`0x17`, `0x31`, `0x32`, and `0x33` are called from `PassThruOpen` and
+`PassThruConnect`. Their buffers are a dword plus 8 bytes, a callback plus a
+dword, a dword and an 8-byte global, and that global plus a 16-byte slot.
+The ordinal bodies are not in this DLL.
+
 ## Theory, the other bench
 
 The Voltage/obdhub bench is a different project. On that bench a module read is
@@ -185,10 +227,11 @@ seed and stays out of this plan.
 
 - The ordinal 21 request, the ordinal 20 gate, the ordinal 22 write, and the
   `0xFF` erase.
-- `VCX_PRO_Recv`.
-- The third argument of `ProOpen`, `ProStart`, `SetFilter`, and `SetTimer`, beyond
-  "the DLL stores this integer".
-- The bytes at a Send PDU's offset 6.
+- The bytes `VCX_PRO_Recv` writes at PDU offset 6.
+- The third argument of `ProOpen`, beyond the protocol dword `open_code` returns.
+  `ProStart` is `0` when connect calls it. `SetFilter` is `1` or `2`.
+  `SetTimer` is `1` or `2`.
+- The caller's data bytes at a Send PDU's offset 6. The prefix around them is packed.
 - The boot-mode poll's starting count, the `WrSerial` pointer, and the indirect
   slots `[0x7B2FE0B4]` and `[0x7B2FE13C]`, which belong to the update in
   [protocol.md](protocol.md) and are not vehicle reads.

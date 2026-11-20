@@ -256,11 +256,113 @@ pub fn j1850_check(data: &[u8]) -> u8 {
     !crc
 }
 
+/// Third argument of `VCX_PRO_SetFilter` on connect (`0x10006e6e`).
+pub const FILTER_PASS: u8 = 1;
+
+/// Third argument of `VCX_PRO_SetFilter` for `CLEAR_MSG_FILTERS`.
+pub const FILTER_CLEAR: u8 = 2;
+
+/// Third argument of `VCX_PRO_Start` when connect calls it (`0x10006e93`).
+pub const START_MODE: u8 = 0;
+
+/// Third argument of `VCX_PRO_SetTimer` after `AddTimer`.
+pub const TIMER_PASS: u8 = 1;
+
+/// Third argument of `VCX_PRO_SetTimer` for `CLEAR_PERIODIC_MSGS`.
+pub const TIMER_CLEAR: u8 = 2;
+
+/// The `SetComParam` record connect stores: key `3`, value the caller's baud.
+#[must_use]
+pub fn baud_record(baud: u32) -> ComRecord {
+    ComRecord {
+        key: 3,
+        value: baud,
+    }
+}
+
+/// `RxStatus` bits `FUN_10006070` sets from the PDU flags dword.
+///
+/// Protocols 7 through 10 clear the result. The log names are
+/// `RXSTATUS_TX_INDICATION` (`0x8`), `RXSTATUS_RX_BREAK` (`0x4`),
+/// `RXSTATUS_START_OF_MESSAGE` (`0x2`), `RXSTATUS_TX_MSG_TYPE` (`0x1`),
+/// `RXSTATUS_CAN_29BIT_ID` (`0x100`), `RXSTATUS_ISO15765_ADDR_TYPE` (`0x80`),
+/// and `RXSTATUS_SW_CAN_HV_RX` (`0x10000`).
+#[must_use]
+pub fn rx_status(protocol: u32, flags: u32) -> u32 {
+    if matches!(protocol, 7..=10) {
+        return 0;
+    }
+    let mut status = 0_u32;
+    if flags & 0x8 != 0 {
+        status |= 0x8;
+    }
+    if flags & 0x2 != 0 {
+        status |= 0x4;
+    }
+    if flags & 0x4 != 0 {
+        status |= 0x2;
+    }
+    if flags & 0x2000 != 0 {
+        status |= 0x1;
+    }
+    if flags & 0x100 != 0 {
+        status |= 0x100;
+    }
+    if flags & 0x400 != 0 {
+        status |= 0x80;
+    }
+    if flags & 0x1000 != 0 {
+        status |= 0x1_0000;
+    }
+    status
+}
+
+/// Protocol id written into the queued reply.
+///
+/// PDU bit 0 rewrites channel ids `6` and `0x10000` to `5`, and ids `0x8005`,
+/// `0x8007`, and `0x8010` to `0x8004`.
+#[must_use]
+pub fn reply_protocol(protocol: u32, flags: u32) -> u32 {
+    if flags & 1 == 0 {
+        return protocol;
+    }
+    match protocol {
+        6 | 0x10000 => 5,
+        0x8005 | 0x8007 | 0x8010 => 0x8004,
+        other => other,
+    }
+}
+
+/// How many data bytes are left after the read path drops a trailing check.
+///
+/// `strip_uart` is channel flag `0x200` being clear. [`None`] is the UART case
+/// whose subtraction leaves 0: `FUN_10006070` returns 0 and queues nothing.
+#[must_use]
+pub fn delivered_len(protocol: u32, length: u16, strip_uart: bool) -> Option<u16> {
+    let uart = matches!(
+        protocol,
+        3 | 4 | 0x8002 | 0x8003 | 0x800b | 0x10003 | 0x8000_0001 | 0x8000_0002
+    );
+    let drop = match protocol {
+        1 | 0x8000 => u16::from(length > 0),
+        2 | 0x8001 => u16::from(length >= 2) * 2,
+        _ if uart && strip_uart && length > 0 => 1,
+        _ => 0,
+    };
+    let left = length - drop;
+    if uart && strip_uart && left == 0 && length > 0 {
+        None
+    } else {
+        Some(left)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ComRecord, FilterRecord, ForwardError, TimerRecord, add_filter, add_timer, j1850_check,
-        open_code, open_payload, send_payload, set_com_param, uart_sum,
+        ComRecord, FilterRecord, ForwardError, TimerRecord, add_filter, add_timer, baud_record,
+        delivered_len, j1850_check, open_code, open_payload, reply_protocol, rx_status,
+        send_payload, set_com_param, uart_sum,
     };
 
     #[test]
@@ -362,5 +464,29 @@ mod tests {
                 0x01, 0x11, 0x22, 0x02, 0x01, 0x78, 0x56, 0x34, 0x12, 0xAA, 0xBB, 0xCC
             ]
         );
+    }
+
+    #[test]
+    fn connect_stores_baud_as_record_3() {
+        let wire = set_com_param(&[baud_record(500_000)]).unwrap();
+        assert_eq!(wire, [0x00, 0x03, 0x00, 0x07, 0xA1, 0x20]);
+    }
+
+    #[test]
+    fn a_break_bit_becomes_rx_status_4() {
+        assert_eq!(rx_status(6, 0x2), 0x4);
+        assert_eq!(rx_status(6, 0x4), 0x2);
+        assert_eq!(rx_status(6, 0x1000), 0x1_0000);
+        assert_eq!(rx_status(7, 0x8), 0);
+    }
+
+    #[test]
+    fn iso15765_keeps_its_bytes_and_j1850_pwm_drops_two() {
+        assert_eq!(delivered_len(6, 8, false), Some(8));
+        assert_eq!(delivered_len(2, 5, false), Some(3));
+        assert_eq!(delivered_len(2, 1, false), Some(1));
+        assert_eq!(delivered_len(3, 1, true), None);
+        assert_eq!(reply_protocol(6, 1), 5);
+        assert_eq!(reply_protocol(6, 0), 6);
     }
 }
