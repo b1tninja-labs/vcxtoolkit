@@ -15,10 +15,11 @@ for this layer.
 - Checks that against the echo frame in the DLL and a `GetInfo` answer captured from a dongle.
 - On Windows, opens the USB serial port: overlapped read and write, 8N1, DTR on, and 921600
   when the profile baud is 0.
+- Names the command headers the DLL writes, and reads a `GetInfo` reply into the six
+  fields that function logs.
 
 ## What it does not do
 
-- It does not name the command headers or parse a `GetInfo` reply.
 - It does not speak SAE J2534. That document is not in `primarysource`, so `spskit` and `obd-bridge`
   do not grow a pass-through, and neither does this crate.
 - It does not call a license server or write firmware.

@@ -7,7 +7,8 @@ The serial frame a VCX dongle speaks: four header bytes, a payload, a checksum, 
 (`VCXCommSendFrame`, `VCXCommRecvFrame`).
 
 Status: the frame codec is implemented and checked against a live `GetInfo` answer. On Windows
-the USB serial port opens the way `VCXCommOpen` does. The command set and a vehicle read are not.
+the USB serial port opens the way `VCXCommOpen` does. The command headers are named, and a
+`GetInfo` reply is read into the fields the DLL logs. A vehicle read is not.
 
 ## What this is not
 
@@ -20,7 +21,8 @@ See `docs/sources.md`.
 ## Use
 
 ```rust
-let wire = vcxcomm::pack([0x80, 0x00, 0x8C, 0x00], &[]).unwrap();
+let header = vcxcomm::Command::GetInfo.header(0);
+let wire = vcxcomm::pack(header, &[]).unwrap();
 let frame = vcxcomm::unpack(&wire).unwrap();
 assert!(frame.payload.is_empty());
 ```
