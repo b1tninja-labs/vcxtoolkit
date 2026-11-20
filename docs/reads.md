@@ -83,6 +83,8 @@ module that receives the command. A vehicle ECU is not the module that receives
 | `VCX_PRO_GetComParam` | `0x7B2F60F0` | No frame. A null device returns `0x80`. Otherwise the function returns 0. |
 | `VCX_PRO_Clear` | `0x7B2F67A0` | No frame. It clears dwords in the block at `device+0x24`. |
 
+`set_com_param`, `add_filter`, and `add_timer` build these payloads and do not send them.
+
 `SetComParam` reads a count from argument byte 0. The payload length is `count * 6`.
 Each record is 8 bytes, starting at argument offset 4. On the wire each record is
 6 bytes: the `u16` at record+0 stored big-endian, then the `u32` at record+4

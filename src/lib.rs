@@ -41,7 +41,8 @@ pub use dfu::{
 #[cfg(windows)]
 pub use exchange::{ExchangeError, exchange};
 pub use forward::{
-    ForwardError, MAX_FORWARD, j1850_check, open_code, open_payload, send_payload, uart_sum,
+    ComRecord, FilterRecord, ForwardError, MAX_FORWARD, TimerRecord, add_filter, add_timer,
+    j1850_check, open_code, open_payload, send_payload, set_com_param, uart_sum,
 };
 pub use frame::{Frame, FrameError, MAX_PAYLOAD, checksum, pack, unpack};
 pub use image::{

@@ -12,4 +12,16 @@ If real Techline Connect must see a device, this crate is the one that would wri
 
 ## spskit
 
-`spskit` builds the SPS request from a saved module read. It does not open a COM port. If a native client must look like `spsvcs`, that package is the one that would speak the GM wrapper: the init string `%04.04%J2534,<tool name>`, the key `HKLM\SOFTWARE\GM\J2534Wrapper`, and the exports `GetDefaultDeviceInfo`, `ClearDefaultDeviceInfo`, `GetConnectedDeviceInfo`, and `GetDeviceStatus`. `j2534bridge.dll`, which would turn those exports into `PassThruOpen`, is not assigned to either package.
+`spskit` builds the SPS request from a saved module read. `wrapper.parse_init()` classifies the connect string, and `vit1.format0_decimal()` reads a service `$1A` response. It does not open a COM port. `j2534bridge.dll` was not found on this machine. `spsvcs.dll` exports `GetDefaultDeviceInfo`, `ClearDefaultDeviceInfo`, `GetConnectedDeviceInfo`, and `GetDeviceStatus` as its own API, and its Init also resolves those names on the missing wrapper. That hop stays unassigned.
+
+```mermaid
+flowchart LR
+  caller["caller supplies the request bytes"]
+  dev["vcxtoolkit send_payload, set_com_param, add_filter, add_timer"]
+  reply["a $1A response"]
+  sps["spskit format0_decimal"]
+  caller --> dev
+  reply --> sps
+```
+
+The three payload builders copy the recovered argument layout and do not open a port. The request bytes stay the caller's. `format0_decimal` reads a response that is already in hand.
