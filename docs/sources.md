@@ -94,6 +94,16 @@ same slot and then calls `0x7B2FB460`, which jumps into section `.V0`; ordinal
 21 does not take that path. The 16 bytes after the `0xBEC` buffer begin
 `67 A5 67 A5`. This crate does not write the buffer back.
 
+Two clear helpers sit just after that decipher. `0x7B2FB340` multiplies two
+64-bit values modulo `2^64 - 59`. `0x7B2FB400` raises a 64-bit base to a
+64-bit exponent in that same modulus, by squaring on the way down and
+multiplying the base back in when the exponent bit is set. Ordinal 21 calls
+the exponentiation once. The base is the eight-byte `0xA0` reply, read as a
+little-endian integer. It then squares that result with `0x7B2FB340`. The
+eight key bytes stored afterward are not that square, and the exponent is not
+the nonce. Both of those values are still produced by the virtualized
+handlers.
+
 ## License retrieve
 
 The license service base is `LicenseServerURL`, `https://api.vxdiag.net/v1`. Auth is

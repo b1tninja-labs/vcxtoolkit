@@ -264,8 +264,10 @@ protocol returns `0x0A`. Any other protocol returns 1. Both pass timeout
 - The eight key bytes ordinal 21 stores beside the serial before it deciphers
   the `GetLicense` reply. The empty `80 00 83 00` request and the eight-byte
   `80 00 A0 00` exchange are recovered. The bytes are not an xor, a sum, MD5,
-  SHA-256, XTEA, or this crate's XXTEA of the nonce and the reply. The
-  ordinal 20 gate, the ordinal 22 write, and the `0xFF` erase are not.
+  SHA-256, XTEA, or this crate's XXTEA of the nonce and the reply. The reply
+  is the base of an exponentiation modulo `2^64 - 59`, and that result is
+  squared, but the stored key is still not that value. The ordinal 20 gate,
+  the ordinal 22 write, and the `0xFF` erase are not.
 - The bytes `VCX_PRO_Recv` writes at PDU offset 6.
 - The third argument of `ProOpen`, beyond the protocol dword `open_code` returns.
   `ProStart` is `0` when connect calls it. `SetFilter` is `1` or `2`.
