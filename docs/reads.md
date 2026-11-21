@@ -5,7 +5,10 @@ reads this crate already performs. No step here was sent for this note. COM4 was
 not opened. No erase, no security seed, and no vehicle write.
 
 SAE J2534 is not imported. ISO 14229-1:2013, ISO 15765-2:2016, and ISO 15031-3:2004
-are present in `primarysource`. They were not the source of the layouts below.
+are present in `primarysource`. They were not the source of the pass-through
+layouts below. The PCI names in
+[The copy and the two standards](#the-copy-and-the-two-standards) come from the
+first two of those standards. The pass-through still does not build those bytes.
 The layouts were read from `vcx-reconstructed.dll` (image base `0x7B2F0000`) and
 from `ManagerCenter.exe` (image base `0x400000`). A byte that those two programs
 do not contain is marked theory, and it is not a frame.
@@ -228,6 +231,44 @@ length is at least 2, and the UART protocols lose one when channel flag `0x200`
 is clear. A UART drop that leaves 0 is not queued. ISO 15765 keeps its bytes.
 PDU bit 0 rewrites protocols `6` and `0x10000` to `5`. The bytes at offset 6
 are still whatever `VCX_PRO_Recv` wrote.
+
+## The copy and the two standards
+
+ISO 15765-2:2016 §9.6.1 Table 8 puts the N_PCI type in bits 7–4 of the first
+PCI byte: `0000` single frame, `0001` first frame, `0010` consecutive frame,
+`0011` flow control, and `0100`–`1111` reserved. A classical single frame
+stores its service length in the low nibble. A low nibble of 0 is not that
+length: §9.6.2 uses it as an escape when `CAN_DL` is greater than 8, and
+§9.6.2.2 says a classical single frame whose length is 0 is ignored. The
+pass-through copy has no `CAN_DL`, so `pci_type` reports that nibble as no
+length and does not choose between the two readings.
+
+ISO 14229-1:2013 §7.2 starts `A_Data` with `A_PCI`. §7.3.2 says that first
+byte is the service id. §7.3.3 fixes the negative-response id at `0x7F`, and
+that value is not itself a service id. In a classical single frame the service
+id is byte 1, and `single_service` returns it only when the length nibble fits
+the slice. `0x10` in the test is a byte in the request range of Table 2. It is
+not a request this crate builds.
+
+The pass-through does not insert this PCI and does not check the length
+against a CAN data length. `send_payload` copies the caller's bytes to PDU
+offset 6. `delivered_len` keeps every ISO 15765 byte. `nibble_path`, recovered
+from the firmware, branches on the same high nibble for `0x00`, `0x10`, and
+`0x20`, and sends every other value, including flow control `0x30`, down the
+other path. That is a match of three values and a gap at the fourth. It is not
+a claim that the firmware implements the transport.
+
+```mermaid
+flowchart LR
+  caller["caller bytes"] --> copy["PDU offset 6, unchanged"]
+  copy --> nibble["bits 7 to 4 of byte 0"]
+  nibble --> sf["0000 single"]
+  nibble --> ff["0001 first"]
+  nibble --> cf["0010 consecutive"]
+  nibble --> fc["0011 flow"]
+  nibble --> reserved["0100 to 1111 reserved"]
+  sf --> sid["byte 1 is the service id when the low nibble fits"]
+```
 
 `periodic_timer` is the `AddTimer` record. The first copied tail is the
 byte-swapped flag dword and then the same data `copied_data` would place at

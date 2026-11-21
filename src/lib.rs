@@ -16,6 +16,7 @@
 //! `open_code` and `send_payload` are the bytes the pass-through copies.
 //! `comm_interface` is the type and profile `VCX_GetCommIf` copies.
 //! The caller's data is not invented here.
+//! `pci_type` names the first byte when that data is already an ISO 15765 frame.
 //! On Windows it opens the USB serial port and exchanges one frame.
 //! It does not write the license or the firmware to the device, and it does not
 //! program a vehicle.
@@ -31,6 +32,7 @@ mod hash;
 mod image;
 mod info;
 mod license_info;
+mod pci;
 mod remote;
 mod serial;
 mod update;
@@ -83,6 +85,7 @@ pub use license_info::{
 };
 #[cfg(windows)]
 pub use license_info::{LicenseReadError, read_license};
+pub use pci::{NEGATIVE_RESPONSE, PciType, pci_type, single_service};
 pub use remote::{
     FIRMWARE_CATALOG, HttpFailure, LICENSE_SERVER, RemoteError, auth_url, decode_license,
     license_url,
