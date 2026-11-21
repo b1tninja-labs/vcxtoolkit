@@ -1215,6 +1215,34 @@ pub fn queued_map() -> QueuedMap {
     }
 }
 
+/// What the prologue of `0x080188B0` does with its second argument.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QueuedScale {
+    /// `second << 2`. The shift by 4 just before it is replaced.
+    pub base: u32,
+    /// Address loaded by `ldr.w r0, [r4, #0xCA8]`.
+    pub word: u32,
+    /// True when [`base`](QueuedScale::base) is not 0. That path stores 1 at
+    /// record offset `0x18`.
+    pub sets_extra: bool,
+}
+
+/// Scale at `0x080188CC`.
+///
+/// The compare of the dword at object `0xC4C` is followed by two shifts and a
+/// `movs`, so the branch at `0x080188D2` tests this scale. A non-zero scale
+/// stores 1 at record offset `0x18`. The later `bl` aims at `0x08019890`, the
+/// second halfword of the `bl` at `0x0801988E`.
+#[must_use]
+pub fn queued_scale(second: u32) -> QueuedScale {
+    let base = second << 2;
+    QueuedScale {
+        base,
+        word: base.wrapping_add(0xCA8),
+        sets_extra: base != 0,
+    }
+}
+
 /// Fields `0x0802DD94` writes into the destination record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Staged {
@@ -1299,7 +1327,7 @@ mod tests {
         add_filter, add_timer, battery_reading, baud_record, close_payload, config_records,
         copied_data, delivered_len, fast_init, five_baud_payload, j1850_check, lookup_record,
         mixed_bit, open_code, open_payload, pdu_flags, periodic_timer, place_queue, queued_map,
-        reply_protocol, rx_status, send_payload, set_com_param, set_filter_payload,
+        queued_scale, reply_protocol, rx_status, send_payload, set_com_param, set_filter_payload,
         set_timer_payload, stage_record, start_filter, start_payload, stop_filter, stop_payload,
         stop_timer, uart_sum, wire_can, wire_id,
     };
@@ -1342,6 +1370,17 @@ mod tests {
         assert_eq!(map.held, 0xC84);
         assert_eq!(map.prior, 0xC3C);
         assert_eq!(map.header_bytes, 8);
+    }
+
+    #[test]
+    fn the_prologue_shift_is_by_two() {
+        let scaled = queued_scale(1);
+        assert_eq!(scaled.base, 4);
+        assert_eq!(scaled.word, 0xCAC);
+        assert!(scaled.sets_extra);
+        let high = queued_scale(0x4000_0000);
+        assert_eq!(high.base, 0);
+        assert!(!high.sets_extra);
     }
 
     #[test]

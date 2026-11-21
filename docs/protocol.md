@@ -473,6 +473,28 @@ Before the kind test, the low byte of the dword at object `0xC50` is stored at
 record + 1, the low byte of the dword at object `0xC54` is stored at record + 2,
 and the dword at object `0xC3C` is stored at record + `0x10`.
 
+The compare of the dword at object `0xC4C` with 0 does not decide the next
+branch. Two shifts and a `movs` replace the flags. The first shift is by 4
+and is replaced by the shift by 2, so the value in `r4` is the second
+argument shifted left by 2. The branch stores 1 at record offset `0x18` when
+that value is not 0. A second argument of `0x40000000` shifts to 0, so the
+store is skipped. The load that follows reads the word at `r4 + 0xCA8`.
+
+```mermaid
+flowchart TD
+  cmp["compare object + 0xC4C with 0"] --> shifts["shifts replace the flags"]
+  shifts --> base["r4 is the second argument shifted left by 2"]
+  base --> z{"r4 is 0?"}
+  z -->|yes| keep["record + 0x18 stays as it was"]
+  z -->|no| one["record + 0x18 becomes 1"]
+  one --> load["load the word at r4 + 0xCA8"]
+  keep --> load
+```
+
+The `bl` at `0x080188E2` aims at `0x08019890`. That address is the second
+halfword of the `bl` at `0x0801988E`, inside the function that starts at
+`0x0801980A`. It is not a function entry.
+
 `0x08018A6A` is the kind test inside that function. The kind byte is at record
 offset 0.
 
