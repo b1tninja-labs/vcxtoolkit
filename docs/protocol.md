@@ -8,7 +8,9 @@ read from `ManagerCenter.exe` (image base `0x400000`) and from `vcx-reconstructe
 (image base `0x7B2F0000`). No step of that sequence was sent to the dongle, and no
 license secret is recorded here. The command bytes inside ordinals 20, 21, and 22
 were not recovered. Those exports jump into a virtualized section, and this note
-does not invent a frame for them.
+does not invent a frame for them. The device image
+`vcxa-1.9.4.2-plain.bin` is loaded at `0x08010000`. Its records are in
+[Device records](#device-records).
 
 ## What this crate does
 
@@ -91,7 +93,7 @@ requires at least 2 stuffed bytes. An `0xAA` takes the next byte as
 `next | (next << 4)`. A plain result shorter than 2, or longer than `0x1002`,
 is refused. Header byte 0 is stored as 0, header byte 2 is the first plain
 byte, the last plain byte is the checksum, and the stored length is the plain
-length minus 2.
+length minus 2. The destination bytes are drawn under [Device records](#device-records).
 
 The same wait, at `0x7B2F4C90`, is what the command functions call after a send.
 It compares queued header byte 2 with the command byte of the request. A match
@@ -272,36 +274,232 @@ leave poll has the same shape. `Sleep` is `[0x7B2FE0B4]`; its argument is
 `Device Firmware Wrong!`, the caption `Error`, and `0x1010`, then returns
 `0xFF`. This crate does not show that dialog and does not send these commands.
 
-`0x0802DD94` logs the dword already at destination offset `0x10`, then stores
-the source dword at offset `0x18` and the source byte at offset `0x0C` as a
-halfword at offset 2. It sets the kind byte to 3. The call after those stores enters `0x08011DE8`
-at `0x08011E22`. Ghidra also has a function at that interior address, so the
-decompiler splits the routine. The mix matches XXTEA, and `0x9E3779B9` is in
-the image at `0x08012704`, but the load in this routine reads `0xF7FFA80B`
-from `0x080126F8`. Those source bytes are not decrypted by the call.
-
-`0x08019466` takes a queue object and a record. A null object or a null record
-skips the update. Otherwise the record's first byte is replaced by that byte
-modulo 10. The slot is at object offset `0xA5C + index * 0x2C`. A byte at
-record offset 2 of `0x11` or more skips the rest of the update. The index is
-still reduced.
-
-In the Ghidra program `vcxa-1.9.4.2-plain.bin` those entries are
-`SetKind3Record` (`0x0802DD94`), `HandleQueueRecord` (`0x08019466`),
-`ProcessPlusBody` (`0x0801BECA`), and `CopyBytes` (`0x08011CD8`). The names
-were applied with `rename_function_by_address`, and the plate comments after
-that, because a later prototype change would erase the plate. `0x08018A6A`
-and `0x08019140` are not functions in that program, so they have no names.
-
-`0x08018A6A` reads the kind byte of a queued record. Kind 2 continues only
-when bit 2 of the byte at `r6 + 0x0C` is set. It sets flag `4`, stores a
-length of the extra byte plus 4, and writes kind 3. Kinds 1 and 5 store a
-length of the extra byte plus the count dword plus 4, and write kind 0.
-`0x08018A8E` turns the id dword into the stored id: bits 24..28 become bits
-0..4, and the other three bytes swap places. Bit 31 of the original dword
-sets flag `0x100`. A non-zero extra byte sets flag `0x400` and the following
-byte is kept. The stored length is the low 16 bits.
+The device image's records, the Ghidra names, and the calls that land inside
+another routine are in [Device records](#device-records).
 
 The DoIP row is a different worker (`0x004363D0`). It sends `\openwrt.bin` through
 `ZWSFirmwareUpdate`, not through ordinal `0x27`. A Nano window leaves that byte clear,
 so that pass does not transfer.
+
+## Device records
+
+These addresses are in `vcxa-1.9.4.2-plain.bin`, loaded at `0x08010000`.
+The Ghidra program of that name has one address space, so the addresses below
+are plain hex. Names were written with `rename_function_by_address`, and the
+plate comments after the names. A prototype change on that server erases a
+plate, so the prototypes were left as the decompiler had them. The program
+was saved. Nothing in this section was sent to the dongle.
+
+| Address | Ghidra name | Role |
+|---|---|---|
+| `0x0801BECA` | `ProcessPlusBody` | Undo an `0xAA` escape and fill the receive record |
+| `0x08011CD8` | `CopyBytes` | Copy a byte count from the second argument to the first |
+| `0x08019466` | `HandleQueueRecord` | Pick one of ten slots and decide whether to update it |
+| `0x0802DD94` | `SetKind3Record` | Store three fields, then set the kind byte to 3 |
+| `0x08018A6A` | none | Kind dispatch. Ghidra has no function at this address |
+| `0x08018A8E` | none | Id shuffle inside that same unlabeled span |
+| `0x08019140` | none | Record logger. The push is here, and Ghidra has no function |
+| `0x08011DE8` | none | XXTEA-shaped mix. Left unnamed, for the reason below |
+
+```mermaid
+flowchart LR
+  frame["0x0801C294"] --> plus["ProcessPlusBody"]
+  stage["SetKind3Record"] --> mix["0x08011E22 inside 0x08011DE8"]
+  queue["HandleQueueRecord"] --> compare["0x08011D8C inside a compare"]
+  queue --> log["0x08019146 inside the logger"]
+  kind5["kind 5"] --> tail["0x08011D7A, tail of CopyBytes"]
+```
+
+### A non-0x80 body
+
+`0x0801C294` uses `ProcessPlusBody` when the saved header byte is not `0x80`.
+The stuffed interior is the bytes between `0xBB` and `0xEE`. An `0xAA` consumes
+the next byte and stores `next | (next << 4)`.
+
+| Stuffed pair | Plain byte |
+|---|---|
+| `AA 0A` | `0xAA` |
+| `AA 0B` | `0xBB` |
+| `AA 0E` | `0xEE` |
+
+A stuffed interior shorter than 2 bytes is refused before that walk. A plain
+result shorter than 2, or longer than `0x1002`, is refused. The walk below is
+the one that finishes.
+
+```mermaid
+flowchart TD
+  stuffed["stuffed interior"] --> short{"fewer than 2 bytes?"}
+  short -->|yes| refuse["refused"]
+  short -->|no| walk["replace each AA pair"]
+  walk --> long{"plain length under 2 or over 0x1002?"}
+  long -->|yes| refuse
+  long -->|no| store["fill the destination record"]
+```
+
+The destination is `r4`. The stuffed source is `r5`. The decompiler leaves both
+as undeclared registers, which matches a body that keeps them live across the
+calls. The stores themselves are the same in the decompiler and in the
+disassembly the crate follows.
+
+| Destination offset | Width | Value |
+|---|---|---|
+| 0 | byte | 0 |
+| 2 | byte | first plain byte, the command |
+| 4 | dword | plain length minus 2 |
+| 8 | bytes | plain bytes between the command and the checksum |
+| `0x102E` | byte | last plain byte, the checksum |
+
+```mermaid
+flowchart LR
+  cmd["plain 0"] --> d2["dest + 2"]
+  mid["plain 1 through n-2"] --> d8["dest + 8"]
+  sum["plain n-1"] --> dsum["dest + 0x102E"]
+  len["n - 2"] --> d4["dest + 4"]
+  zero["0"] --> d0["dest + 0"]
+```
+
+`plus_body` returns the command, the middle bytes, and the checksum. It refuses
+the same two lengths.
+
+### Kind 3
+
+`SetKind3Record` takes the destination in the second argument and the source in
+the third. It logs the dword already sitting at destination offset `0x10`. It
+does not write that slot.
+
+| Source | Destination |
+|---|---|
+| dword at 0 | dword at `0x18` |
+| byte at `0x0C` | halfword at 2 |
+| | byte at 0, written last, value 3 |
+
+```mermaid
+sequenceDiagram
+  participant S as source
+  participant D as destination
+  Note over D: dword at 0x10 is logged and left in place
+  S->>D: dword at 0 stored at 0x18
+  S->>D: byte at 0x0C stored as a halfword at 2
+  Note over D: byte at 0 becomes 3
+```
+
+The call after those stores is `bl 0x08011E22`, with the pointer at destination
+`0x1C`, the source address plus 4, and the same source byte. `0x08011E22` is
+`lsls.w r8, r7, #4` inside `0x08011DE8`. Ghidra also created a function at that
+interior address, so a decompile of the caller shows a call, and a decompile of
+the interior starts in the middle of the mix. The bytes at source offset 4 are
+not written by that call. `stage_record` keeps the three stores and leaves the
+call out.
+
+`0x08011DE8` divides the length by 4, adds 6 to `0x34` divided by that count,
+and subtracts the XXTEA mix `(z >> 5 ^ y << 2) + (y >> 3 ^ z << 4)` combined
+with the sum and a key word. The image holds `0x9E3779B9` at `0x08012704` and
+`0x61C88647` at `0x08012708`. The load at `0x08011E06` reads `0xF7FFA80B` from
+`0x080126F8`, twelve bytes before the usual delta. That is why the routine has
+no Ghidra name.
+
+### Ten queue slots
+
+`HandleQueueRecord` takes the queue object in `r0` and the record in `r1`.
+
+```mermaid
+flowchart TD
+  entry["HandleQueueRecord"] --> null{"object or record is null?"}
+  null -->|yes| common["join the common return, which stores 1"]
+  null -->|no| index["first byte becomes first byte modulo 10"]
+  index --> slot["slot is object + 0xA5C + index * 0x2C"]
+  slot --> limit{"byte at offset 2 is 0x11 or more?"}
+  limit -->|yes| common
+  limit -->|no| update["occupancy bit and the later calls"]
+```
+
+A null object or a null record is the compare at `0x08019472`. Either one
+branches to `0x0801947A`, which logs, stores 0, and jumps to `0x08019536`.
+That address logs again and stores 1 before the pop. The `0x11` check at
+`0x080194A6` takes the same jump. The index store at `0x08019494` has already
+run by then.
+
+The occupancy dword is at object offset `0xA50`. Slot 0 starts `0x0C` bytes
+later, at `0xA5C`. Each slot is `0x2C` bytes, and the index is modulo 10, so
+the object holds ten slots. Slot 1 is `0xA88`. Slot 9 is `0xBE8`.
+
+```mermaid
+flowchart TB
+  occ["0xA50 occupancy dword"] --> s0["0xA5C slot 0"]
+  s0 --> s1["0xA88 slot 1"]
+  s1 --> mid["slots 2 through 8"]
+  mid --> s9["0xBE8 slot 9"]
+```
+
+On the update path the word at `0xA50` is combined with `1 << index`. The
+branch taken when byte 2 is 0, or when the dword at offset 4 is 0, enters that
+bit update in the middle of its instructions (`0x080194B2` and `0x080194B8`
+both branch to `0x080194F6`). The stores on that branch stay undescribed,
+because the branch enters the bit update in the middle of its instructions.
+The call at `0x08019526` enters a compare at `0x08011D8C` with length
+`0x2C`. It is not `CopyBytes`. `place_queue` keeps the index, the slot offset,
+and the `0x11` decision.
+
+The logger's push is `0x08019140`: `push {r3, r4, r5, lr}` and `mov r4, r0`.
+`HandleQueueRecord` calls `0x08019146`, which is the first `bl` inside that
+push. Ghidra has a function there and none at the push, and the decompile uses
+an undeclared register as the record pointer. The bytes it prints, when the
+pointer is the record, are the bytes at offsets 0, 1, 2, and 3, the dwords at
+4 and `0x28`, then `byte 2` bytes from offset 8 and `byte 3` bytes from offset
+`0x18`.
+
+### Queued CAN
+
+`0x08018A6A` is a label inside a span Ghidra did not make into a function. The
+kind byte is at offset 0.
+
+```mermaid
+flowchart TD
+  kind["kind byte"] --> k2{"kind 2?"}
+  k2 -->|yes| gate{"bit 2 of the byte at r6+0x0C?"}
+  gate -->|clear| none["no record"]
+  gate -->|set| two["flags 4, length extra+4, kind becomes 3"]
+  k2 -->|no| k15{"kind 1 or kind 5?"}
+  k15 -->|yes| zero["length extra+count+4, kind becomes 0"]
+  k15 -->|no| none
+  two --> id["shuffle the id dword"]
+  zero --> id
+```
+
+Kind 5 reaches `0x08011D7A` through `0x08018B36`. `CopyBytes` returns from
+`0x08011D7C` when the carry flag is clear, and the `movs` just before that
+call leaves it clear. No byte is stored.
+
+`0x08018A8E` rewrites the id dword.
+
+| Source bits | Stored bits |
+|---|---|
+| 24..28 | 0..4 |
+| 16..23 | 8..15 |
+| 8..15 | 16..23 |
+| 0..7 | 24..31 |
+
+Bits 29..31 of the source are left out of the stored id. Bit 31 on its own
+sets flag `0x100`. A non-zero extra byte sets flag `0x400` and keeps the
+following byte. The stored length is the low 16 bits of the length above.
+
+```mermaid
+flowchart LR
+  b0["bits 0..7"] --> o24["bits 24..31"]
+  b8["bits 8..15"] --> o16["bits 16..23"]
+  b16["bits 16..23"] --> o8["bits 8..15"]
+  b24["bits 24..28"] --> o0["bits 0..4"]
+  b31["bit 31"] --> flag["flag 0x100"]
+```
+
+### Looks that stayed unlabeled
+
+The string `bsp_can_filter_set: port=%d, channel=%d, id=%08x, mask=%08x` has
+one pointer, the suffix at `0x0801E6B0`, loaded at `0x08018DB2`. The two record
+loads just before that instruction are a halfword at offset 0 and a dword at
+offset 4. The switch that owns the function jumps to the call at `0x08018DB4`,
+past those loads. There is no four-field filter record on that path.
+
+The format `flow = %02x, txid = %08x` is passed as a buffer pointer from
+`0x0801C1B8`, `0x0801C1D4`, `0x0801C2BC`, and `0x0801C2D0`. None of those sites
+loads a flow byte and a txid dword out of one record to print them.

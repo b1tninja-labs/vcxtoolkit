@@ -1121,8 +1121,8 @@ pub struct WiredCan {
 /// which is bit 2 of the byte at `r6 + 0x0C`. It then sets flag `4`, stores
 /// `extra + 4`, and writes kind 3. Kinds 1 and 5 store `extra + count + 4`
 /// and write kind 0. Any other kind returns `None`. Kind 5 also calls
-/// `0x08011D7A`, which is the tail of a copy loop, so the bytes it moves are
-/// not represented here.
+/// `0x08011D7A`. That address is the tail of the copy at `0x08011CD8`, and
+/// the carry flag is clear, so the call stores nothing.
 #[must_use]
 pub fn wire_can(
     kind: u8,
@@ -1174,8 +1174,9 @@ pub struct Staged {
 ///
 /// The source dword is written at offset `0x18`. The source byte at offset
 /// `0x0C` is written as a halfword at offset 2. The kind byte is then set to
-/// 3. The call that follows enters the XXTEA mix at `0x08011E22`, so those
-/// source bytes are not decrypted here.
+/// 3. The call that follows enters `0x08011DE8` at `0x08011E22`. The mix
+/// matches XXTEA, but the routine's own load is `0xF7FFA80B`, so those source
+/// bytes are not decrypted here.
 #[must_use]
 pub fn stage_record(dword: u32, mark: u8) -> Staged {
     Staged {
