@@ -274,13 +274,24 @@ leave poll has the same shape. `Sleep` is `[0x7B2FE0B4]`; its argument is
 
 `0x0802DD94` logs the dword already at destination offset `0x10`, then stores
 the source dword at offset `0x18` and the source byte at offset `0x0C` as a
-halfword at offset 2. It sets the kind byte to 3. The call after those stores enters the XXTEA mix
-at `0x08011E22`, so those source bytes are not decrypted.
+halfword at offset 2. It sets the kind byte to 3. The call after those stores enters `0x08011DE8`
+at `0x08011E22`. Ghidra also has a function at that interior address, so the
+decompiler splits the routine. The mix matches XXTEA, and `0x9E3779B9` is in
+the image at `0x08012704`, but the load in this routine reads `0xF7FFA80B`
+from `0x080126F8`. Those source bytes are not decrypted by the call.
 
-`0x08019466` takes a queue object and a record. The record's first byte is
-replaced by that byte modulo 10. The slot is at object offset
-`0xA5C + index * 0x2C`. A byte at record offset 2 of `0x11` or more skips the
-rest of the update. The index is still reduced.
+`0x08019466` takes a queue object and a record. A null object or a null record
+skips the update. Otherwise the record's first byte is replaced by that byte
+modulo 10. The slot is at object offset `0xA5C + index * 0x2C`. A byte at
+record offset 2 of `0x11` or more skips the rest of the update. The index is
+still reduced.
+
+In the Ghidra program `vcxa-1.9.4.2-plain.bin` those entries are
+`SetKind3Record` (`0x0802DD94`), `HandleQueueRecord` (`0x08019466`),
+`ProcessPlusBody` (`0x0801BECA`), and `CopyBytes` (`0x08011CD8`). The names
+were applied with `rename_function_by_address`, and the plate comments after
+that, because a later prototype change would erase the plate. `0x08018A6A`
+and `0x08019140` are not functions in that program, so they have no names.
 
 `0x08018A6A` reads the kind byte of a queued record. Kind 2 continues only
 when bit 2 of the byte at `r6 + 0x0C` is set. It sets flag `4`, stores a
