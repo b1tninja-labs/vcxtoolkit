@@ -273,6 +273,9 @@ protocol returns `0x0A`. Any other protocol returns 1. Both pass timeout
 - The word `FIVE_BAUD_INIT` copies out of a queued message. That word is
   whatever arrived, not a constant.
 - The `0x800E` phase record when the pin word is not `0x060E`. The builder does not store it.
-- The `WrSerial` pointer. The boot-mode poll starts at 10 and the indirect
-  slots are `Sleep` and `MessageBoxA`, in [protocol.md](protocol.md). Those
-  are not vehicle reads.
+- The 8 bytes `WrSerial` sends, when the third argument is 0, are offset
+  `0x14` of a DFU `GetInfo` reply of at least `0x21` bytes. Outside boot
+  mode the device returns one byte, `0x91`, and that copy does not run.
+  The boot-mode poll starts at 10 and the indirect slots are `Sleep` and
+  `MessageBoxA`, in [protocol.md](protocol.md). The crate does not enter
+  boot mode and does not send `WrSerial`.

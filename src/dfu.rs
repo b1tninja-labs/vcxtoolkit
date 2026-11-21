@@ -16,11 +16,10 @@ pub const LEAVE_MODE: u8 = 0;
 
 /// Initial value of the register that polls `GetMode` until the byte is [`LEAVE_MODE`].
 ///
-/// That path is the one taken when the serial pointer slot is 0. `ESI` starts
-/// at 10. The body runs again when `ESI` is already 0, so the maximum number
-/// of passes is [`poll_passes`] of this value. The prologue also stores 10 in
-/// the slot the other path tests, so the instructions that have a pointer take
-/// that other path.
+/// That path is the one taken when the third argument is 0. `ESI` starts at
+/// 10. The body runs again when `ESI` is already 0, so the maximum number of
+/// passes is [`poll_passes`] of this value. A non-zero third argument is the
+/// pointer `WrSerial` uses instead of the `GetInfo` buffer.
 pub const LEAVE_POLLS: u8 = 10;
 
 /// Initial value of the boot-mode poll counter.
@@ -55,6 +54,13 @@ pub const fn poll_passes(initial: u8) -> u8 {
 /// Offset of the 8-byte name inside the buffer `VCX_DFU_GetInfo` fills.
 pub const DFU_NAME_OFFSET: usize = 0x20;
 
+/// Offset of the 8 bytes `WrSerial` sends when its pointer argument is 0.
+///
+/// That pointer is `[esp+0x3C]` and the buffer starts at `[esp+0x28]`.
+/// The copy skips the reply's first payload byte, so the bytes in a
+/// [`Frame`](crate::Frame) payload start at `1 + DFU_SERIAL_OFFSET`.
+pub const DFU_SERIAL_OFFSET: usize = 0x14;
+
 /// Round constant `FUN_7b2fab90` subtracts. Modulo `2^32` this adds `0x9E3779B9`.
 const ROUND: u32 = 0x61C8_8647;
 
@@ -80,12 +86,15 @@ impl Built {
 pub enum DfuError {
     /// The payload is longer than [`MAX_PAYLOAD`].
     Length,
+    /// A `GetInfo` payload does not reach the serial field.
+    Short,
 }
 
 impl std::fmt::Display for DfuError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Length => "DFU payload is longer than 0x1026",
+            Self::Short => "DFU GetInfo payload does not reach the serial",
         })
     }
 }
@@ -130,12 +139,36 @@ pub fn get_mode() -> Built {
 
 /// `VCX_DFU_GetInfo`: header byte `0xF2` and an empty payload.
 ///
-/// The reply length must be at least `0x21`. The 8-byte name sits at
-/// [`DFU_NAME_OFFSET`] of the buffer the DLL fills, which skips the reply's
-/// first payload byte.
+/// The reply length must be at least `0x21`. The DLL skips the first payload
+/// byte and copies the rest. The 8-byte name sits at [`DFU_NAME_OFFSET`] of
+/// that copy. The 8 bytes `WrSerial` sends, when its pointer is 0, sit at
+/// [`DFU_SERIAL_OFFSET`].
 #[must_use]
 pub fn dfu_get_info() -> Built {
     built(Command::DfuGetInfo, Vec::new())
+}
+
+/// The 8 bytes at [`DFU_SERIAL_OFFSET`] of a `GetInfo` reply.
+///
+/// `payload` is the unpacked frame payload. On a reply of at least `0x21`
+/// bytes, byte 0 is the status the DLL returns and does not copy.
+///
+/// # Errors
+///
+/// Returns [`DfuError::Short`] when `payload` is shorter than `0x21` bytes.
+/// That is the length the DLL refuses: it logs `VCX_ERR_COMM_RX`, returns
+/// `0x83`, and does not copy.
+#[must_use = "a serial that is parsed and dropped was not read"]
+pub fn dfu_serial(payload: &[u8]) -> Result<[u8; 8], DfuError> {
+    const START: usize = 1 + DFU_SERIAL_OFFSET;
+    const NEED: usize = START + 8;
+    const _: () = assert!(0x21 >= NEED, "the DLL's minimum copy covers the serial");
+    if payload.len() < 0x21 {
+        return Err(DfuError::Short);
+    }
+    let mut serial = [0_u8; 8];
+    serial.copy_from_slice(&payload[START..START + 8]);
+    Ok(serial)
 }
 
 /// `VCX_DFU_ErChip`: header byte `0xF3` and an empty payload.
@@ -282,9 +315,9 @@ fn mix(z: u32, y: u32, sum: u32, key: u32) -> u32 {
 mod tests {
     use super::{
         BOOT_MODE, BOOT_POLLS, DFU_NAME_OFFSET, LEAVE_MODE, LEAVE_POLLS, NAME_DIALOG,
-        NAME_DIALOG_CAPTION, NAME_DIALOG_FLAGS, POLL_WAIT, RewriteError, dfu_get_info, erase_chip,
-        flash_length_fits, get_mode, in_boot, left_boot, name_blocks, poll_passes, rewrite_page,
-        set_mode, write_flash, write_serial,
+        NAME_DIALOG_CAPTION, NAME_DIALOG_FLAGS, POLL_WAIT, RewriteError, dfu_get_info, dfu_serial,
+        erase_chip, flash_length_fits, get_mode, in_boot, left_boot, name_blocks, poll_passes,
+        rewrite_page, set_mode, write_flash, write_serial,
     };
     use crate::{MAX_PAYLOAD, pack};
 
@@ -342,6 +375,33 @@ mod tests {
         assert!(!flash_length_fits(0xA5A5_A5A5));
         assert!(flash_length_fits(8));
         assert!(!flash_length_fits(u32::try_from(MAX_PAYLOAD).unwrap() + 1));
+    }
+
+    #[test]
+    fn the_serial_is_eight_bytes_at_offset_0x14() {
+        let mut payload = vec![0_u8; 0x21];
+        let serial = [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7];
+        payload[0x15..0x1D].copy_from_slice(&serial);
+        assert_eq!(dfu_serial(&payload), Ok(serial));
+        assert_eq!(dfu_serial(&payload[..0x20]), Err(super::DfuError::Short));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "needs the CH343 dongle on COM4"]
+    fn com4_dfu_info_outside_boot_is_one_byte() {
+        let port = crate::open_usb(4, 0).expect("COM4");
+        let query = dfu_get_info();
+        let reply = crate::exchange(
+            &port,
+            query.header(),
+            &query.payload,
+            std::time::Duration::from_secs(3),
+        )
+        .expect("GetInfo");
+        assert_eq!(reply.header, [0x80, 0x00, 0xF2, 0x00]);
+        assert_eq!(reply.payload, [0x91]);
+        assert_eq!(dfu_serial(&reply.payload), Err(super::DfuError::Short));
     }
 
     #[test]

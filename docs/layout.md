@@ -8,7 +8,8 @@
   and the packed page records.
   `license_info` reads the on-device license buffer and derives the key half. `catalog` reads the firmware catalog.
   `remote` retrieves a license and a catalog firmware image. `serial` opens the USB port.
-  `dfu` builds the DFU payloads the DLL writes and rewrites a page in memory.
+  `dfu` builds the DFU payloads the DLL writes, reads the 8 serial bytes at
+  offset `0x14` of a `GetInfo` reply, and rewrites a page in memory.
   `update` describes the firmware-update steps and refuses the ones that would be sent.
   `forward` builds the `VCX_PRO_Open` dword and the `VCX_PRO_Send` payload the pass-through copies.
 - `winport/` is the package `vcxtoolkit-open`. It is the Win32 boundary: this crate forbids `unsafe`,

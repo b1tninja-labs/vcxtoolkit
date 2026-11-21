@@ -206,12 +206,19 @@ payload above `0x1026`. `write_flash` builds the buffer ordinal 37 copies, with
 no page index, and refuses a length above `0x1026`. It does not build the
 `0xA5A5A5A5` call. `plan_firmware` records that length and `hold` refuses it.
 
-`WrSerial` is called with length 8. The pointer is the stack dword at
-`[ESP+0x20]`. The prologue stores 10 there, and no later plain instruction in
-this function overwrites it. When that dword is 0 the pointer is `[ESP+0x3C]`,
-a slot this function does not write. Neither is a recovered serial, so the plan
-does not build the 8 bytes. On that zero-pointer path the function loads 10
-into `ESI` and polls `GetMode` until the reply byte is 0.
+`WrSerial` is called with length 8. At the resting frame, `[esp+0x20]` is the
+third argument. The manager passes 0, so the other pointer is used:
+`lea eax, [esp+0x3C]`. `GetInfo` filled the buffer at `[esp+0x28]`, and
+`0x3C - 0x28` is `0x14`. The copy skips the reply's first payload byte, so
+those 8 bytes are `payload[0x15..0x1D]`. `dfu_serial` reads them. A reply
+shorter than `0x21` bytes is the same path as a failed receive: the log is
+`VCX_ERR_COMM_RX` and the return is `0x83`, with no copy. `GetInfo` is
+reached only after the boot poll has seen `0xA5`. Outside that mode the
+device answers `80 00 F2 00` with the one byte `0x91`. A non-zero third
+argument is the pointer instead of that buffer. The store of 10 is the
+poll counter, at a different slot. After `WrSerial` returns, the zero-argument
+path loads 10 into `ESI` and polls `GetMode` until the reply byte is 0. This
+crate does not send `SetMode` and does not send `WrSerial`.
 
 The boot-mode poll, after `SetMode 0xA5`, uses the same 10. The store is
 `[esp+0x20] = 10` while the three log arguments are still pushed, and

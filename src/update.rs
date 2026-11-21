@@ -7,8 +7,8 @@
 
 use crate::Command;
 use crate::dfu::{
-    BOOT_MODE, BOOT_POLLS, Built, DFU_NAME_OFFSET, LEAVE_MODE, POLL_WAIT, dfu_get_info, erase_chip,
-    flash_length_fits, get_mode, in_boot, set_mode,
+    BOOT_MODE, BOOT_POLLS, Built, DFU_NAME_OFFSET, DFU_SERIAL_OFFSET, LEAVE_MODE, POLL_WAIT,
+    dfu_get_info, erase_chip, flash_length_fits, get_mode, in_boot, set_mode,
 };
 use crate::image::{ImageError, file_is_newer, read_header, read_pages};
 
@@ -61,12 +61,14 @@ pub enum UpdateStep {
         /// How many pages the loop walks.
         pages: u32,
     },
-    /// `WrSerial` with a pointer this function does not recover.
+    /// `WrSerial` with length 8.
     ///
-    /// The prologue stores 10 in the slot the call later tests. No later plain
-    /// instruction overwrites it. The zero-pointer path uses a stack slot the
-    /// function does not write. Neither is 8 recovered bytes.
-    Serial,
+    /// When the third argument is 0, the pointer is the DFU `GetInfo` buffer
+    /// at `offset`. The step does not carry the bytes: the reply is not in hand.
+    Serial {
+        /// Offset of the 8 bytes inside the buffer `GetInfo` fills.
+        offset: usize,
+    },
 }
 
 /// A step that does not leave this process.
@@ -108,7 +110,7 @@ pub enum Refused {
         /// [`flash_length_fits`](crate::flash_length_fits) of that length.
         fits: bool,
     },
-    /// `WrSerial`. The 8 bytes were not recovered, so nothing was built.
+    /// `WrSerial`. The 8 bytes are a `GetInfo` field, and this step does not send them.
     Serial,
 }
 
@@ -129,7 +131,7 @@ impl std::fmt::Display for Refused {
             Self::Flash { length, fits } => {
                 write!(f, "WrFlash length {length:#010x} is not sent (fits={fits})")
             }
-            Self::Serial => f.write_str("WrSerial bytes were not recovered"),
+            Self::Serial => f.write_str("WrSerial is not sent"),
         }
     }
 }
@@ -195,7 +197,9 @@ pub fn plan_firmware(
             pages: count,
         });
     }
-    steps.push(UpdateStep::Serial);
+    steps.push(UpdateStep::Serial {
+        offset: DFU_SERIAL_OFFSET,
+    });
     steps.push(UpdateStep::Send(set_mode(LEAVE_MODE)));
     Ok(UpdatePlan { steps })
 }
@@ -230,13 +234,13 @@ pub fn hold(step: &UpdateStep) -> Result<Kept, Refused> {
             length: *length,
             fits: flash_length_fits(*length),
         }),
-        UpdateStep::Serial => Err(Refused::Serial),
+        UpdateStep::Serial { .. } => Err(Refused::Serial),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Kept, Refused, UpdateStep, hold, plan_firmware};
+    use super::{DFU_SERIAL_OFFSET, Kept, Refused, UpdateStep, hold, plan_firmware};
     use crate::{Command, ImageError};
 
     fn image(pages: u32) -> Vec<u8> {
@@ -284,7 +288,9 @@ mod tests {
                 pages: 1,
             }
         )));
-        assert!(plan.steps.contains(&UpdateStep::Serial));
+        assert!(plan.steps.contains(&UpdateStep::Serial {
+            offset: DFU_SERIAL_OFFSET,
+        }));
         assert!(plan.steps.iter().any(|step| matches!(
             step,
             UpdateStep::BootPoll {
