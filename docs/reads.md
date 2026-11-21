@@ -249,9 +249,12 @@ this dongle, and it is not a frame to send. `$27` on that bench is a security
 seed and stays out of this plan.
 
 `READ_VBATT` writes 14000 and then calls `VCX_DEV_GetPinVol` with middle
-argument `0x10`. Success replaces 14000 with the first dword that call writes.
-Failure stores 0. `PassThruSetProgrammingVoltage` forwards the caller's pin
-and voltage to `VCX_DEV_SetPinVol` and adds no bytes of its own. `SET_PIN_USE`,
+argument `0x10`. The request is that one byte. A reply of at least 5 bytes
+replaces 14000 with payload bytes 1 through 4 as a big-endian dword.
+A shorter reply keeps the backup the function already stored. Failure of
+the pass-through call stores 0. `PassThruSetProgrammingVoltage` forwards
+the caller's pin and voltage to `VCX_DEV_SetPinVol`, which sends the pin
+byte and the voltage big-endian. The pass-through adds no bytes of its own. `SET_PIN_USE`,
 `READ_PROG_VOLTAGE`, `CAN_SET_BTR`, and `FIVE_BAUD_INIT_NO_INV_KB2` return
 success and call no device function. `FIVE_BAUD_INIT` sends one caller byte with flags 8.
 `FAST_INIT` accepts the UART protocols `3`, `4`, `0x8002`, `0x8003`, `0x10003`,

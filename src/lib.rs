@@ -34,7 +34,11 @@ mod serial;
 mod update;
 
 pub use catalog::{FirmwareItem, firmware_for, newer_firmware, parse_catalog};
-pub use command::{Command, ConfigCopy, config_copy, pro_send_header};
+pub use command::{
+    Command, ConfigCopy, DeviceTime, PinReading, TEST_COPY, TEST_REPLY, config_copy, device_time,
+    get_pin_vol, pin_reading, pro_send_header, reset_ex, reset_payload, set_beep, set_led,
+    set_pin_vol, test_record,
+};
 pub use dfu::{
     BOOT_MODE, BOOT_POLLS, Built, DFU_NAME_OFFSET, DFU_SERIAL_OFFSET, DfuError, LEAVE_MODE,
     LEAVE_POLLS, NAME_DIALOG, NAME_DIALOG_CAPTION, NAME_DIALOG_FLAGS, POLL_WAIT, RewriteError,

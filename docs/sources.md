@@ -43,8 +43,18 @@ caller buffer and, for a get, copy that many reply bytes back. The reply
 must be at least one byte longer than the copy. `config_copy` is those two
 lengths: `SetFrame` 2 and 0, `SetCom` 8 and 0, `GetCom` 0 and 8, `SetBt`
 `0x28` and 0, `GetBt` 0 and `0x28`, `SetLan` `0x0C` and 0, `GetLan` 0 and
-`0x0C`, `SetWlan` `0x2C` and 0, `GetWlan` 0 and `0x2C`. `VCX_DEV_Reset` and
-`VCX_DEV_ResetEx` both write `0x8D`. The names and bytes are the `Command` enum.
+`0x0C`, `SetWlan` `0x2C` and 0, `GetWlan` 0 and `0x2C`. `VCX_DEV_Reset` and `VCX_DEV_ResetEx`
+both write `0x8D`. `VCX_DEV_Reset` sends that header with an empty payload.
+`VCX_DEV_ResetEx`
+sends the same header and one caller byte. `SetPinVol` sends the pin byte
+and a big-endian dword. `GetPinVol` (logged as `VCX_DEV_GetDlcVol`) sends
+one pin byte. A reply of at least 5 bytes stores payload bytes 1 through 4
+as a big-endian dword, and byte 5, when present, selects `PinVolBackups`.
+`GetTime` sends nothing and stores the same kind of dword from a reply of
+at least 5 bytes. On 2026-11-20 that dword was `0x1FAE5582`, and pin `0x10`
+stored `500` at backup index `0x10`. `SetLed` copies 4 caller bytes and `SetBeep` copies 2, in
+order. `GetTest` requires `0x107` reply bytes and copies the `0x106` bytes
+after the first. The names and bytes are the `Command` enum.
 
 ## GetInfo fields
 

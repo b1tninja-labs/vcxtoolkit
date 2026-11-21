@@ -3,7 +3,8 @@
 `Cargo.toml`, `src/lib.rs`, `tests/`, and `winport/`.
 
 - Library code lives under `src/`; keep `lib.rs` to module declarations and re-exports.
-  `command` names the headers and the `VCX_DEV_Config` copy lengths. `frame` packs one frame. `info` reads the logged `GetInfo`
+  `command` names the headers, the `VCX_DEV_Config` copy lengths, and the
+  device-command payloads. `frame` packs one frame. `info` reads the logged `GetInfo`
   fields. `exchange` writes one frame and reads the reply. `image` reads a firmware header
   and the packed page records.
   `license_info` reads the on-device license buffer and derives the key half. `catalog` reads the firmware catalog.

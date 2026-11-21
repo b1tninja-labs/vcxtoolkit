@@ -203,9 +203,130 @@ pub const fn config_copy(command: Command) -> Option<ConfigCopy> {
     Some(ConfigCopy { send, recv })
 }
 
+/// Payload `VCX_DEV_SetPinVol` sends: the pin byte, then the dword big-endian.
+#[must_use]
+pub const fn set_pin_vol(pin: u8, value: u32) -> [u8; 5] {
+    let bytes = value.to_be_bytes();
+    [pin, bytes[0], bytes[1], bytes[2], bytes[3]]
+}
+
+/// Payload `VCX_DEV_GetPinVol` sends. The log name of that export is `VCX_DEV_GetDlcVol`.
+#[must_use]
+pub const fn get_pin_vol(pin: u8) -> [u8; 1] {
+    [pin]
+}
+
+/// Dword `VCX_DEV_GetPinVol` stores when the reply payload is at least 5 bytes.
+///
+/// `value` is payload bytes 1 through 4, big-endian. `index` is payload byte 5
+/// when the payload is at least 6 bytes, and 0 otherwise. The function stores
+/// `value` in `PinVolBackups[index]`. A shorter reply does not parse; the
+/// function returns the backup it already holds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PinReading {
+    /// First payload byte, which the function returns.
+    pub status: u8,
+    /// The dword written to the caller.
+    pub value: u32,
+    /// The `PinVolBackups` slot.
+    pub index: u8,
+}
+
+/// The parsed `GetPinVol` reply.
+///
+/// Returns `None` when `payload` is shorter than 5 bytes.
+#[must_use]
+pub const fn pin_reading(payload: &[u8]) -> Option<PinReading> {
+    if payload.len() < 5 {
+        return None;
+    }
+    let value = u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]);
+    let index = if payload.len() >= 6 { payload[5] } else { 0 };
+    Some(PinReading {
+        status: payload[0],
+        value,
+        index,
+    })
+}
+
+/// Dword `VCX_DEV_GetTime` stores. The request payload is empty.
+///
+/// The reply must be at least 5 bytes. `status` is the first payload byte,
+/// which the function returns. `value` is the next four bytes, big-endian.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeviceTime {
+    /// First payload byte.
+    pub status: u8,
+    /// The dword written to the caller.
+    pub value: u32,
+}
+
+/// The parsed `GetTime` reply.
+///
+/// Returns `None` when `payload` is shorter than 5 bytes.
+#[must_use]
+pub const fn device_time(payload: &[u8]) -> Option<DeviceTime> {
+    if payload.len() < 5 {
+        return None;
+    }
+    Some(DeviceTime {
+        status: payload[0],
+        value: u32::from_be_bytes([payload[1], payload[2], payload[3], payload[4]]),
+    })
+}
+
+/// Bytes `VCX_DEV_SetLed` copies from the caller pointer, in that order.
+#[must_use]
+pub const fn set_led(bytes: [u8; 4]) -> [u8; 4] {
+    bytes
+}
+
+/// Bytes `VCX_DEV_SetBeep` copies from the caller pointer, in that order.
+#[must_use]
+pub const fn set_beep(bytes: [u8; 2]) -> [u8; 2] {
+    bytes
+}
+
+/// Reply length `VCX_DEV_GetTest` requires.
+///
+/// The first payload byte is the return. The next [`TEST_COPY`] bytes are
+/// copied to the caller.
+pub const TEST_REPLY: usize = 0x107;
+
+/// Bytes `VCX_DEV_GetTest` copies, starting at payload byte 1.
+pub const TEST_COPY: usize = 0x106;
+
+/// The status byte and the copied body of a `GetTest` reply.
+///
+/// Returns `None` when `payload` is shorter than [`TEST_REPLY`].
+#[must_use]
+pub const fn test_record(payload: &[u8]) -> Option<(u8, &[u8])> {
+    const _: () = assert!(TEST_REPLY == TEST_COPY + 1);
+    if payload.len() < TEST_REPLY {
+        return None;
+    }
+    Some((payload[0], payload.split_at(1).1.split_at(TEST_COPY).0))
+}
+
+/// Payload `VCX_DEV_Reset` sends. `VCX_DEV_ResetEx` sends [`reset_ex`] instead.
+#[must_use]
+pub const fn reset_payload() -> [u8; 0] {
+    []
+}
+
+/// The one byte `VCX_DEV_ResetEx` sends. The header byte is still `0x8D`.
+#[must_use]
+pub const fn reset_ex(byte: u8) -> [u8; 1] {
+    [byte]
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Command, ConfigCopy, config_copy, pro_send_header};
+    use super::{
+        Command, ConfigCopy, DeviceTime, PinReading, TEST_COPY, TEST_REPLY, config_copy,
+        device_time, get_pin_vol, pin_reading, pro_send_header, reset_ex, reset_payload, set_beep,
+        set_led, set_pin_vol, test_record,
+    };
 
     fn every() -> [Command; 36] {
         [
@@ -365,6 +486,79 @@ mod tests {
         );
         assert_eq!(config_copy(Command::GetInfo), None);
         assert_eq!(config_copy(Command::Echo), None);
+    }
+
+    #[test]
+    fn pin_voltage_and_time_are_big_endian_dwords() {
+        assert_eq!(
+            set_pin_vol(0x10, 0x1122_3344),
+            [0x10, 0x11, 0x22, 0x33, 0x44]
+        );
+        assert_eq!(get_pin_vol(0x10), [0x10]);
+        assert_eq!(
+            pin_reading(&[0x00, 0x11, 0x22, 0x33, 0x44]),
+            Some(PinReading {
+                status: 0,
+                value: 0x1122_3344,
+                index: 0,
+            })
+        );
+        assert_eq!(
+            pin_reading(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x07]),
+            Some(PinReading {
+                status: 0,
+                value: 0x1122_3344,
+                index: 7,
+            })
+        );
+        assert_eq!(pin_reading(&[0x00, 0x11, 0x22, 0x33]), None);
+        assert_eq!(
+            device_time(&[0x01, 0x00, 0x00, 0x01, 0x02]),
+            Some(DeviceTime {
+                status: 1,
+                value: 0x0102,
+            })
+        );
+        assert_eq!(device_time(&[0x01, 0x00, 0x00, 0x01]), None);
+    }
+
+    #[test]
+    fn led_beep_reset_and_test_keep_the_caller_bytes() {
+        assert_eq!(set_led([1, 2, 3, 4]), [1, 2, 3, 4]);
+        assert_eq!(set_beep([5, 6]), [5, 6]);
+        assert_eq!(reset_payload(), []);
+        assert_eq!(reset_ex(0xA5), [0xA5]);
+        let mut payload = vec![0x7E_u8; TEST_REPLY];
+        payload[0] = 0x02;
+        payload[1] = 0x03;
+        let (status, body) = test_record(&payload).unwrap();
+        assert_eq!(status, 0x02);
+        assert_eq!(body.len(), TEST_COPY);
+        assert_eq!(body[0], 0x03);
+        assert_eq!(test_record(&payload[..TEST_REPLY - 1]), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "needs the CH343 dongle on COM4"]
+    fn com4_reads_the_device_time_and_pin_voltage() {
+        let port = crate::open_usb(4, 0).expect("COM4");
+        let timeout = std::time::Duration::from_secs(3);
+        let time = crate::exchange(&port, Command::GetTime.header(0), &[], timeout).expect("time");
+        let clock = device_time(&time.payload).expect("time payload");
+        let pin = crate::exchange(
+            &port,
+            Command::GetPinVol.header(0),
+            &get_pin_vol(0x10),
+            timeout,
+        )
+        .expect("pin");
+        let reading = pin_reading(&pin.payload).expect("pin payload");
+        assert_eq!(time.header, [0x80, 0x00, 0x88, 0x00]);
+        assert_eq!(pin.header, [0x80, 0x00, 0x86, 0x00]);
+        assert_eq!(clock.status, 0);
+        assert_eq!(reading.status, 0);
+        assert_eq!(reading.index, 0x10);
     }
 
     #[test]
