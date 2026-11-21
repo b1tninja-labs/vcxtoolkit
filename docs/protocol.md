@@ -76,6 +76,15 @@ the ring at `device+0x24` and then the ring at `device+0x28`. A miss sleeps 1
 millisecond. The deadline read after that sleep is virtualized. A missed
 deadline returns `0x83`.
 
+The same wait, at `0x7B2F4C90`, is what the command functions call after a send.
+It compares queued header byte 2 with the command byte of the request. A match
+returns 1. A queued `0x86` with a payload of at least 5 bytes stores the same
+pin backup `GetPinVol` stores, and the wait continues. A `0x86` payload shorter
+than 5 bytes stores nothing. Any other command is logged and the wait
+continues. The timeout added is the dword at `device+0x20`. A miss returns 0,
+and the caller returns `0x83`. `0x7B2F4B60` copies one ring chunk unchanged,
+writes `0xBB` before it and after it, and stores the chunk length plus 2.
+
 ## License update, as the manager orders it
 
 `DeviceInfoWnd::UpdateDeviceLicense` (`0x0042BA50`) opens with `VCX_Open` when byte

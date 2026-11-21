@@ -234,6 +234,23 @@ pub fn recv_length(payload_len: usize) -> Option<u32> {
     u32::try_from(payload_len.checked_add(4)?).ok()
 }
 
+/// Bytes `0x7B2F4B60` writes around one ring chunk.
+///
+/// The chunk is copied unchanged. A `0xBB` is written before it and after it.
+/// The stored length is the chunk length plus 2. There is no checksum and no
+/// escape in this copy.
+///
+/// Returns `None` when that length does not fit in a `u32`.
+#[must_use]
+pub fn marker_wrap(chunk: &[u8]) -> Option<(Vec<u8>, u32)> {
+    let stored = u32::try_from(chunk.len().checked_add(2)?).ok()?;
+    let mut out = Vec::with_capacity(chunk.len() + 2);
+    out.push(MARKER);
+    out.extend_from_slice(chunk);
+    out.push(MARKER);
+    Some((out, stored))
+}
+
 fn write_stuffed(out: &mut Vec<u8>, bytes: &[u8]) {
     for byte in bytes {
         if *byte == MARKER || *byte == ESCAPE || *byte == ESCAPE_ALSO {
@@ -248,8 +265,8 @@ fn write_stuffed(out: &mut Vec<u8>, bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ESCAPE, ESCAPE_ALSO, FrameError, MARKER, MAX_PAYLOAD, MAX_SEND, SendCut, checksum, pack,
-        queued_body, recv_length, send_cut, unpack,
+        ESCAPE, ESCAPE_ALSO, FrameError, MARKER, MAX_PAYLOAD, MAX_SEND, SendCut, checksum,
+        marker_wrap, pack, queued_body, recv_length, send_cut, unpack,
     };
 
     #[test]
@@ -343,5 +360,9 @@ mod tests {
         assert_eq!(queued_body(&[0x80, 0x00, 0x8C, 0x00]), None);
         assert_eq!(recv_length(0), Some(4));
         assert_eq!(recv_length(queued.payload.len()), Some(5));
+        assert_eq!(
+            marker_wrap(b"ABC").unwrap(),
+            (vec![MARKER, b'A', b'B', b'C', MARKER], 5)
+        );
     }
 }

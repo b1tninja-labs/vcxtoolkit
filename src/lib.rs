@@ -45,9 +45,9 @@ pub use comm::{
 };
 pub use command::{
     Command, ConfigCopy, DeviceTime, EXINFO_LEN, EXINFO_MARK, EXINFO_REPLY, ExInfoError,
-    PinReading, TEST_COPY, TEST_REPLY, apply_ex_info, config_copy, device_time, get_pin_vol,
-    pin_reading, pro_send_header, reset_ex, reset_payload, set_beep, set_led, set_pin_vol,
-    syn_ex_info, test_record,
+    PinReading, TEST_COPY, TEST_REPLY, WaitReply, apply_ex_info, config_copy, device_time,
+    get_pin_vol, pin_reading, pro_send_header, reset_ex, reset_payload, set_beep, set_led,
+    set_pin_vol, syn_ex_info, test_record, wait_reply,
 };
 pub use dfu::{
     BOOT_MODE, BOOT_POLLS, Built, DFU_NAME_OFFSET, DFU_SERIAL_OFFSET, DfuError, LEAVE_MODE,
@@ -67,8 +67,8 @@ pub use forward::{
     start_payload, stop_filter, stop_payload, stop_timer, uart_sum,
 };
 pub use frame::{
-    Frame, FrameError, MAX_PAYLOAD, MAX_SEND, QueuedBody, SendCut, checksum, pack, queued_body,
-    recv_length, send_cut, unpack,
+    Frame, FrameError, MAX_PAYLOAD, MAX_SEND, QueuedBody, SendCut, checksum, marker_wrap, pack,
+    queued_body, recv_length, send_cut, unpack,
 };
 pub use image::{
     ImageError, ImageHeader, PageRecord, file_is_newer, read_header, read_pages, version_is_newer,

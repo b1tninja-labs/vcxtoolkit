@@ -50,6 +50,9 @@ sends the same header and one caller byte. `SetPinVol` sends the pin byte
 and a big-endian dword. `GetPinVol` (logged as `VCX_DEV_GetDlcVol`) sends
 one pin byte. A reply of at least 5 bytes stores payload bytes 1 through 4
 as a big-endian dword, and byte 5, when present, selects `PinVolBackups`.
+The reply wait uses that same pair when a `0x86` frame arrives while another
+command is outstanding. A wait for `0x86` itself returns on that frame and
+does not take the backup path.
 `GetTime` sends nothing and stores the same kind of dword from a reply of
 at least 5 bytes. On 2026-11-20 that dword was `0x1FAE5582`, and pin `0x10`
 stored `500` at backup index `0x10`. `SetLed` copies 4 caller bytes and `SetBeep` copies 2, in

@@ -249,6 +249,50 @@ pub const fn pin_reading(payload: &[u8]) -> Option<PinReading> {
     })
 }
 
+/// What the reply wait at `0x7B2F4C90` does with one queued command.
+///
+/// The wait is given the command byte of the request it just sent. The
+/// timeout it adds is the dword at `device+0x20`. A miss returns 0, and the
+/// caller returns `0x83`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WaitReply {
+    /// The queued command is the one the request sent. The wait returns 1.
+    Ready,
+    /// Command `0x86` arrived while waiting for a different command, and the
+    /// payload is at least 5 bytes. The dword and the index match
+    /// [`pin_reading`]. The wait stores that backup and keeps waiting.
+    Pin {
+        /// Payload bytes 1 through 4, big-endian.
+        value: u32,
+        /// Payload byte 5, or 0 when the payload is shorter than 6 bytes.
+        index: u8,
+    },
+    /// Any other queued command, including a `0x86` payload shorter than 5
+    /// bytes. The wait keeps waiting.
+    Again,
+}
+
+/// Classify one queued reply while a request is waiting.
+///
+/// A command equal to `expected` finishes the wait. That comparison runs
+/// before the `0x86` backup, so a wait for `0x86` itself does not take the
+/// backup path.
+#[must_use]
+pub fn wait_reply(expected: u8, command: u8, payload: &[u8]) -> WaitReply {
+    if command == expected {
+        return WaitReply::Ready;
+    }
+    if command == Command::GetPinVol.code() {
+        if let Some(reading) = pin_reading(payload) {
+            return WaitReply::Pin {
+                value: reading.value,
+                index: reading.index,
+            };
+        }
+    }
+    WaitReply::Again
+}
+
 /// Dword `VCX_DEV_GetTime` stores. The request payload is empty.
 ///
 /// The reply must be at least 5 bytes. `status` is the first payload byte,
@@ -407,9 +451,9 @@ pub fn apply_ex_info(buffer: &mut [u8], payload: &[u8]) -> Result<u8, ExInfoErro
 mod tests {
     use super::{
         Command, ConfigCopy, DeviceTime, EXINFO_LEN, EXINFO_MARK, EXINFO_REPLY, ExInfoError,
-        PinReading, TEST_COPY, TEST_REPLY, apply_ex_info, config_copy, device_time, get_pin_vol,
-        pin_reading, pro_send_header, reset_ex, reset_payload, set_beep, set_led, set_pin_vol,
-        syn_ex_info, test_record,
+        PinReading, TEST_COPY, TEST_REPLY, WaitReply, apply_ex_info, config_copy, device_time,
+        get_pin_vol, pin_reading, pro_send_header, reset_ex, reset_payload, set_beep, set_led,
+        set_pin_vol, syn_ex_info, test_record, wait_reply,
     };
 
     fn every() -> [Command; 36] {
@@ -604,6 +648,25 @@ mod tests {
             })
         );
         assert_eq!(device_time(&[0x01, 0x00, 0x00, 0x01]), None);
+    }
+
+    #[test]
+    fn an_unexpected_pin_reply_is_stored_and_the_wait_continues() {
+        let payload = [0x00, 0x11, 0x22, 0x33, 0x44, 0x07];
+        assert_eq!(wait_reply(0x8C, 0x8C, &[]), WaitReply::Ready);
+        assert_eq!(wait_reply(0x86, 0x86, &payload), WaitReply::Ready);
+        assert_eq!(
+            wait_reply(0x8C, 0x86, &payload),
+            WaitReply::Pin {
+                value: 0x1122_3344,
+                index: 0x07,
+            }
+        );
+        assert_eq!(
+            wait_reply(0x8C, 0x86, &[0x00, 0x11, 0x22, 0x33]),
+            WaitReply::Again
+        );
+        assert_eq!(wait_reply(0x8C, 0x80, &[0x01]), WaitReply::Again);
     }
 
     #[test]
