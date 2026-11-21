@@ -296,8 +296,9 @@ was saved. Nothing in this section was sent to the dongle.
 | `0x08011CD8` | `CopyBytes` | Copy a byte count from the second argument to the first |
 | `0x08019466` | `HandleQueueRecord` | Pick one of ten slots and decide whether to update it |
 | `0x0802DD94` | `SetKind3Record` | Store three fields, then set the kind byte to 3 |
-| `0x08018A6A` | none | Kind dispatch. Ghidra has no function at this address |
-| `0x08018A8E` | none | Id shuffle inside that same unlabeled span |
+| `0x080188B0` | `ProcessQueuedCan` | Read the record at object `0xC68` and fill the header |
+| `0x08018A6A` | `ProcessQueuedCan` | Kind test inside that function |
+| `0x08018A8E` | `ProcessQueuedCan` | Id shuffle inside that function |
 | `0x08019140` | none | Record logger. The push is here, and Ghidra has no function |
 | `0x08011DE8` | none | XXTEA-shaped mix. Left unnamed, for the reason below |
 
@@ -450,8 +451,30 @@ pointer is the record, are the bytes at offsets 0, 1, 2, and 3, the dwords at
 
 ### Queued CAN
 
-`0x08018A6A` is a label inside a span Ghidra did not make into a function. The
-kind byte is at offset 0.
+`ProcessQueuedCan` starts at `0x080188B0`. Ghidra had no function there until
+this entry was created. The record is the object plus `0xC68`, so the kind
+byte at record offset 0 is the byte at object offset `0xC68`. The second
+argument is the header.
+
+```mermaid
+flowchart LR
+  obj["object"] --> rec["+0xC68 record"]
+  obj --> gateb["+0xC2C gate byte"]
+  rec --> idw["+0x14 id dword"]
+  rec --> extra["+0x18 extra byte"]
+  hdr["header"] --> flags["+0 flags"]
+  hdr --> len["+4 length halfword"]
+  hdr --> ptr["+8 pointer"]
+  ptr --> sid["+0 shuffled id"]
+  ptr --> markb["+4 mark byte"]
+```
+
+Before the kind test, the low byte of the dword at object `0xC50` is stored at
+record + 1, the low byte of the dword at object `0xC54` is stored at record + 2,
+and the dword at object `0xC3C` is stored at record + `0x10`.
+
+`0x08018A6A` is the kind test inside that function. The kind byte is at record
+offset 0.
 
 ```mermaid
 flowchart TD

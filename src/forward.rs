@@ -1159,6 +1159,62 @@ pub fn wire_can(
     })
 }
 
+/// Object offsets `ProcessQueuedCan` (`0x080188B0`) reads.
+///
+/// The record starts at [`record`](QueuedMap::record). The header is the
+/// second argument: flags at byte 0, the length halfword at byte 4, and the
+/// pointer to the shuffled id at byte 8.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QueuedMap {
+    /// Start of the record. The kind byte is here.
+    pub record: usize,
+    /// Byte whose bit 2 lets kind 2 continue.
+    pub gate: usize,
+    /// Dword whose low byte is copied to `record + 1`.
+    pub copied_a: usize,
+    /// Dword whose low byte is copied to `record + 2`.
+    pub copied_b: usize,
+    /// Dword copied to `record + 0x10`.
+    pub prior: usize,
+    /// Count dword. It is `record + 0x0C`.
+    pub count: usize,
+    /// Id dword. It is `record + 0x14`.
+    pub id: usize,
+    /// Extra byte. It is `record + 0x18`.
+    pub extra: usize,
+    /// Byte kept when [`extra`](QueuedMap::extra) is not 0. It is `record + 0x19`.
+    pub mark: usize,
+    /// Dword kind 5 sets to 0. It is `record + 0x1C`.
+    pub held: usize,
+    /// Header offset of the flag dword.
+    pub header_flags: usize,
+    /// Header offset of the length halfword.
+    pub header_length: usize,
+    /// Header offset of the pointer that receives the shuffled id.
+    pub header_bytes: usize,
+}
+
+/// Offsets of the queued record and the header `0x080188B0` fills.
+#[must_use]
+pub fn queued_map() -> QueuedMap {
+    let record = 0xC68;
+    QueuedMap {
+        record,
+        gate: 0xC2C,
+        copied_a: 0xC50,
+        copied_b: 0xC54,
+        prior: 0xC3C,
+        count: record + 0x0C,
+        id: record + 0x14,
+        extra: record + 0x18,
+        mark: record + 0x19,
+        held: record + 0x1C,
+        header_flags: 0,
+        header_length: 4,
+        header_bytes: 8,
+    }
+}
+
 /// Fields `0x0802DD94` writes into the destination record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Staged {
@@ -1242,10 +1298,10 @@ mod tests {
         FilterRecord, ForwardError, INIT_WAIT, Periodic, TIMER_CLEAR, TIMER_PASS, TimerRecord,
         add_filter, add_timer, battery_reading, baud_record, close_payload, config_records,
         copied_data, delivered_len, fast_init, five_baud_payload, j1850_check, lookup_record,
-        mixed_bit, open_code, open_payload, pdu_flags, periodic_timer, place_queue, reply_protocol,
-        rx_status, send_payload, set_com_param, set_filter_payload, set_timer_payload,
-        stage_record, start_filter, start_payload, stop_filter, stop_payload, stop_timer, uart_sum,
-        wire_can, wire_id,
+        mixed_bit, open_code, open_payload, pdu_flags, periodic_timer, place_queue, queued_map,
+        reply_protocol, rx_status, send_payload, set_com_param, set_filter_payload,
+        set_timer_payload, stage_record, start_filter, start_payload, stop_filter, stop_payload,
+        stop_timer, uart_sum, wire_can, wire_id,
     };
 
     #[test]
@@ -1274,6 +1330,18 @@ mod tests {
         assert_eq!(staged.kind, 3);
         assert_eq!(staged.half, 0x0a);
         assert_eq!(staged.dword, 0x1122_3344);
+    }
+
+    #[test]
+    fn the_queued_record_starts_at_object_0xc68() {
+        let map = queued_map();
+        assert_eq!(map.record, 0xC68);
+        assert_eq!(map.gate, 0xC2C);
+        assert_eq!(map.id, 0xC7C);
+        assert_eq!(map.count, 0xC74);
+        assert_eq!(map.held, 0xC84);
+        assert_eq!(map.prior, 0xC3C);
+        assert_eq!(map.header_bytes, 8);
     }
 
     #[test]
