@@ -76,6 +76,15 @@ the ring at `device+0x24` and then the ring at `device+0x28`. A miss sleeps 1
 millisecond. The deadline read after that sleep is virtualized. A missed
 deadline returns `0x83`.
 
+The device sender at `0x0801C17E` refuses a payload length of 0 or one past
+`0x1026`. The checksum it stores at struct offset `0x102E` is the low 8 bits
+of a byte sum. When header byte 0 is `0x80` the sum covers all four header
+bytes and the payload, which is the same byte the crate's checksum
+already returns. The wire frame is then the `0xBB` frame. When header byte 0
+is not `0x80`, only header byte 2 and the payload are summed, and the wire
+frame opens with `0xBB`, escapes `0xAA`, `0xBB`, and `0xEE` as `AA 0A`,
+`AA 0B`, and `AA 0E`, and closes with `0xEE`.
+
 The same wait, at `0x7B2F4C90`, is what the command functions call after a send.
 It compares queued header byte 2 with the command byte of the request. A match
 returns 1. A queued `0x86` with a payload of at least 5 bytes stores the same

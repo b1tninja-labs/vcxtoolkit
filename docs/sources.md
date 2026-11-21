@@ -190,6 +190,12 @@ names the steps and `hold` refuses a step that would be sent. `rewrite_page` is
 `FUN_7b2fab90`, checked against an emulation of that function. This crate does
 not send the update.
 
+The page payloads are XXTEA under `Head.Key`, which is the 16 bytes
+`WWWALLSCANNERCOM`. Decrypting each page with that key, the inverse of
+`rewrite_page`, produces a 190238-byte STM32 image. It is loaded in Ghidra as
+`vcxa-1.9.4.2-plain.bin` at base `0x08010000`. The device sender and the
+command-byte table in [protocol.md](protocol.md) were read from that image.
+
 `VCXPT32.dll` `FUN_10005df0` copies the caller's data to PDU offset 6, and
 `FUN_10005a20` chooses the `VCX_PRO_Open` dword. ISO 15765 is `0x8001`.
 `FUN_10006070` copies a reply PDU back out: flags, length, then the data, with

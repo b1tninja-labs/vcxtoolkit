@@ -7,9 +7,10 @@
 //! a header. `GetLicense` is the empty frame ordinal 21 sends last; that byte is
 //! not an immediate in the clear exports. The eight-byte frame before it is
 //! header `80 00 A0 00`. Third bytes `0x44`, `0x46`, `0x81`, `0x82`, `0x84`,
-//! `0x87`, `0x91`, `0xA0`, `0xF4`, and `0xF6` have no named sender. `0x91` is
-//! the `VCX_ERR_INVALID_CMD` return. `VCX_DEV_Config` sends `0x90` and
-//! `0x92` through `0x99`. Its switch sends selector `0x91` nowhere.
+//! `0x87`, `0x91`, `0xA0`, `0xF4`, and `0xF6` have no named sender in the DLL.
+//! `0x91` is the `VCX_ERR_INVALID_CMD` return. `VCX_DEV_Config` sends `0x90` and
+//! `0x92` through `0x99`. Its switch sends selector `0x91` nowhere. The app
+//! image lists some of those bytes in [`APP_COMMANDS`].
 
 /// One command header, named the way the DLL logs the sender.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -447,14 +448,37 @@ pub fn apply_ex_info(buffer: &mut [u8], payload: &[u8]) -> Result<u8, ExInfoErro
     Ok(status)
 }
 
+/// Command bytes in the decrypted app image, in table order.
+///
+/// The table is at file offset `0x286C6` of `vcxa-1.9.4.2-plain.bin`. Each
+/// record is the command byte, three zero bytes, and a word. `0xF2`, `0xF3`,
+/// and `0xF5` are not in this table.
+pub const APP_COMMANDS: [u8; 45] = [
+    0x40, 0x41, 0x42, 0x43, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x80, 0x81, 0x82, 0x83,
+    0x84, 0x85, 0x86, 0x88, 0x89, 0x8A, 0x8B, 0x8C, 0x8D, 0x8E, 0x8F, 0x90, 0x92, 0x93, 0x94, 0x95,
+    0x96, 0x97, 0x98, 0x99, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xF0, 0xF1, 0xF7, 0xFF,
+];
+
 #[cfg(test)]
 mod tests {
     use super::{
-        Command, ConfigCopy, DeviceTime, EXINFO_LEN, EXINFO_MARK, EXINFO_REPLY, ExInfoError,
-        PinReading, TEST_COPY, TEST_REPLY, WaitReply, apply_ex_info, config_copy, device_time,
-        get_pin_vol, pin_reading, pro_send_header, reset_ex, reset_payload, set_beep, set_led,
-        set_pin_vol, syn_ex_info, test_record, wait_reply,
+        APP_COMMANDS, Command, ConfigCopy, DeviceTime, EXINFO_LEN, EXINFO_MARK, EXINFO_REPLY,
+        ExInfoError, PinReading, TEST_COPY, TEST_REPLY, WaitReply, apply_ex_info, config_copy,
+        device_time, get_pin_vol, pin_reading, pro_send_header, reset_ex, reset_payload, set_beep,
+        set_led, set_pin_vol, syn_ex_info, test_record, wait_reply,
     };
+
+    #[test]
+    fn the_app_image_lists_get_info_and_not_dfu_get_info() {
+        assert!(APP_COMMANDS.contains(&0x8C));
+        assert!(APP_COMMANDS.contains(&0xF0));
+        assert!(APP_COMMANDS.contains(&0xF1));
+        assert!(APP_COMMANDS.contains(&0xF7));
+        assert!(!APP_COMMANDS.contains(&0xF2));
+        assert!(!APP_COMMANDS.contains(&0xF3));
+        assert!(!APP_COMMANDS.contains(&0xF5));
+        assert!(!APP_COMMANDS.contains(&0x44));
+    }
 
     fn every() -> [Command; 36] {
         [

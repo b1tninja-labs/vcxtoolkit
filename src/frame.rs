@@ -251,6 +251,62 @@ pub fn marker_wrap(chunk: &[u8]) -> Option<(Vec<u8>, u32)> {
     Some((out, stored))
 }
 
+/// Escape prefix the device uses when header byte 0 is not `0x80`.
+pub const PLUS_ESCAPE: u8 = 0xAA;
+
+/// Closing byte of that same frame. The opening byte is still `0xBB`.
+pub const PLUS_END: u8 = 0xEE;
+
+/// Where the device stores the checksum in its frame struct.
+pub const DEVICE_CHECKSUM: usize = 0x102E;
+
+/// `true` when the device's sender at `0x0801C17E` will build a frame.
+///
+/// The payload length has to be at least 1 and at most [`MAX_PAYLOAD`].
+#[must_use]
+pub fn device_will_send(payload_len: usize) -> bool {
+    (1..=MAX_PAYLOAD).contains(&payload_len)
+}
+
+fn write_plus(out: &mut Vec<u8>, byte: u8) {
+    let stuffed = match byte {
+        PLUS_ESCAPE => [PLUS_ESCAPE, 0x0A],
+        MARKER => [PLUS_ESCAPE, 0x0B],
+        PLUS_END => [PLUS_ESCAPE, 0x0E],
+        other => {
+            out.push(other);
+            return;
+        }
+    };
+    out.extend_from_slice(&stuffed);
+}
+
+/// Frame the device builds in `0x0801C17E`.
+///
+/// A payload length of 0, or one past [`MAX_PAYLOAD`], returns `None`. When
+/// header byte 0 is `0x80`, the bytes are [`pack`]. Otherwise the frame opens
+/// with `0xBB`, escapes header byte 2, the payload, and the checksum with
+/// [`PLUS_ESCAPE`], and closes with [`PLUS_END`].
+#[must_use]
+pub fn device_frame(header: [u8; 4], payload: &[u8]) -> Option<Vec<u8>> {
+    if !device_will_send(payload.len()) {
+        return None;
+    }
+    if header[0] == 0x80 {
+        return pack(header, payload).ok();
+    }
+    let sum = checksum(header, payload);
+    let mut out = Vec::with_capacity(payload.len() + 6);
+    out.push(MARKER);
+    write_plus(&mut out, header[2]);
+    for byte in payload {
+        write_plus(&mut out, *byte);
+    }
+    write_plus(&mut out, sum);
+    out.push(PLUS_END);
+    Some(out)
+}
+
 fn write_stuffed(out: &mut Vec<u8>, bytes: &[u8]) {
     for byte in bytes {
         if *byte == MARKER || *byte == ESCAPE || *byte == ESCAPE_ALSO {
@@ -265,8 +321,9 @@ fn write_stuffed(out: &mut Vec<u8>, bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ESCAPE, ESCAPE_ALSO, FrameError, MARKER, MAX_PAYLOAD, MAX_SEND, SendCut, checksum,
-        marker_wrap, pack, queued_body, recv_length, send_cut, unpack,
+        ESCAPE, ESCAPE_ALSO, FrameError, MARKER, MAX_PAYLOAD, MAX_SEND, PLUS_END, SendCut,
+        checksum, device_frame, device_will_send, marker_wrap, pack, queued_body, recv_length,
+        send_cut, unpack,
     };
 
     #[test]
@@ -363,6 +420,24 @@ mod tests {
         assert_eq!(
             marker_wrap(b"ABC").unwrap(),
             (vec![MARKER, b'A', b'B', b'C', MARKER], 5)
+        );
+    }
+
+    #[test]
+    fn the_device_closes_a_non_80_header_with_ee() {
+        let header = [0x80, 0x00, 0x8C, 0x00];
+        let payload = [0x11, MARKER];
+        assert_eq!(
+            device_frame(header, &payload).unwrap(),
+            pack(header, &payload).unwrap()
+        );
+        assert!(!device_will_send(0));
+        assert_eq!(device_frame(header, &[]), None);
+        assert!(!device_will_send(MAX_PAYLOAD + 1));
+        let other = [0x00, 0x00, MARKER, 0x00];
+        assert_eq!(
+            device_frame(other, &[PLUS_END, 0x01]).unwrap(),
+            vec![MARKER, 0xAA, 0x0B, 0xAA, 0x0E, 0x01, 0xAA, 0x0A, PLUS_END]
         );
     }
 }
