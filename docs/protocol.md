@@ -495,6 +495,35 @@ The `bl` at `0x080188E2` aims at `0x08019890`. That address is the second
 halfword of the `bl` at `0x0801988E`, inside the function that starts at
 `0x0801980A`. It is not a function entry.
 
+A later compare of the same dword, at `0x080188F4`, is live. Mode 2 stores 1
+at record offset `0x18` and takes the class from stack index 5, which is
+`4 + extra` once extra is 1. Any other mode takes the early leave when stack
+byte 4 is 0, or when bit 7 of stack byte `0x0F` is clear, unless the mode is
+3. That leave stores 0 at record offset `0x18` and forces the class to `0xF0`.
+
+The class that reaches `0x08018988` is the high nibble, `byte & 0xF0`. Nibble
+0, `0x10`, and `0x20` stay in the loop. Any other nibble, including the forced
+`0xF0`, calls `0x08018856` and leaves.
+
+```mermaid
+flowchart TD
+  mode{"dword at 0xC4C equals 2?"}
+  mode -->|yes| five["extra becomes 1, class byte is stack index 5"]
+  mode -->|no| early{"mode is not 3, and stack 4 is 0 or bit 7 of stack 0x0F is clear?"}
+  early -->|yes| leave["extra becomes 0, class is 0xF0"]
+  early -->|no| later["the later compares"]
+  five --> nib["high nibble"]
+  later --> nib
+  leave --> other["call 0x08018856 and leave"]
+  nib --> n0{"nibble 0?"}
+  n0 -->|yes| p0["path 0"]
+  n0 -->|no| n10{"nibble 0x10?"}
+  n10 -->|yes| p10["path 0x10"]
+  n10 -->|no| n20{"nibble 0x20?"}
+  n20 -->|yes| p20["path 0x20"]
+  n20 -->|no| other
+```
+
 `0x08018A6A` is the kind test inside that function. The kind byte is at record
 offset 0.
 

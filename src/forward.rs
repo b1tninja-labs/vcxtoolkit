@@ -1243,6 +1243,60 @@ pub fn queued_scale(second: u32) -> QueuedScale {
     }
 }
 
+/// Where `0x08018988` sends the high nibble.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NibblePath {
+    /// High nibble 0. The compare at `0x0801898A` takes this.
+    Zero,
+    /// High nibble `0x10`.
+    Sixteen,
+    /// High nibble `0x20`.
+    ThirtyTwo,
+    /// Any other high nibble. The call is `0x08018856`, and the function leaves.
+    Other,
+}
+
+/// High nibble tested at `0x08018988`.
+#[must_use]
+pub fn nibble_path(byte: u8) -> NibblePath {
+    match byte & 0xF0 {
+        0x00 => NibblePath::Zero,
+        0x10 => NibblePath::Sixteen,
+        0x20 => NibblePath::ThirtyTwo,
+        _ => NibblePath::Other,
+    }
+}
+
+/// How the dword at object `0xC4C` chooses the class byte.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClassPick {
+    /// Mode 2 stores 1 at record offset `0x18` and reads stack index 5.
+    Mode2 {
+        /// Stack index of the class byte. It is 5.
+        index: usize,
+    },
+    /// Extra is cleared and the class is forced to `0xF0`, which leaves.
+    Leave,
+    /// Mode 3, or a non-zero stack byte 4 whose stack byte `0x0F` has bit 7 set.
+    Later,
+}
+
+/// Class choice at `0x080188F4`.
+///
+/// Mode 2 is the first compare. Otherwise a zero byte at stack 4, or a clear
+/// bit 7 at stack `0x0F`, clears the extra byte and forces class `0xF0` when
+/// the mode is not 3.
+#[must_use]
+pub fn class_pick(mode: u32, at_4: u8, at_f: u8) -> ClassPick {
+    if mode == 2 {
+        return ClassPick::Mode2 { index: 5 };
+    }
+    if mode != 3 && (at_4 == 0 || at_f & 0x80 == 0) {
+        return ClassPick::Leave;
+    }
+    ClassPick::Later
+}
+
 /// Fields `0x0802DD94` writes into the destination record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Staged {
@@ -1322,14 +1376,15 @@ pub fn stop_timer(id: u8) -> TimerRecord {
 #[cfg(test)]
 mod tests {
     use super::{
-        BATTERY_SEED, ChannelFields, ComRecord, FILTER_CLEAR, FILTER_PASS, FilterCopy,
-        FilterRecord, ForwardError, INIT_WAIT, Periodic, TIMER_CLEAR, TIMER_PASS, TimerRecord,
-        add_filter, add_timer, battery_reading, baud_record, close_payload, config_records,
-        copied_data, delivered_len, fast_init, five_baud_payload, j1850_check, lookup_record,
-        mixed_bit, open_code, open_payload, pdu_flags, periodic_timer, place_queue, queued_map,
-        queued_scale, reply_protocol, rx_status, send_payload, set_com_param, set_filter_payload,
-        set_timer_payload, stage_record, start_filter, start_payload, stop_filter, stop_payload,
-        stop_timer, uart_sum, wire_can, wire_id,
+        BATTERY_SEED, ChannelFields, ClassPick, ComRecord, FILTER_CLEAR, FILTER_PASS, FilterCopy,
+        FilterRecord, ForwardError, INIT_WAIT, NibblePath, Periodic, TIMER_CLEAR, TIMER_PASS,
+        TimerRecord, add_filter, add_timer, battery_reading, baud_record, class_pick,
+        close_payload, config_records, copied_data, delivered_len, fast_init, five_baud_payload,
+        j1850_check, lookup_record, mixed_bit, nibble_path, open_code, open_payload, pdu_flags,
+        periodic_timer, place_queue, queued_map, queued_scale, reply_protocol, rx_status,
+        send_payload, set_com_param, set_filter_payload, set_timer_payload, stage_record,
+        start_filter, start_payload, stop_filter, stop_payload, stop_timer, uart_sum, wire_can,
+        wire_id,
     };
 
     #[test]
@@ -1381,6 +1436,16 @@ mod tests {
         let high = queued_scale(0x4000_0000);
         assert_eq!(high.base, 0);
         assert!(!high.sets_extra);
+    }
+
+    #[test]
+    fn a_low_nibble_does_not_change_the_class() {
+        assert_eq!(nibble_path(0x1F), NibblePath::Sixteen);
+        assert_eq!(nibble_path(0xF0), NibblePath::Other);
+        assert_eq!(class_pick(2, 0, 0), ClassPick::Mode2 { index: 5 });
+        assert_eq!(class_pick(0, 1, 0x40), ClassPick::Leave);
+        assert_eq!(class_pick(3, 0, 0), ClassPick::Later);
+        assert_eq!(class_pick(0, 1, 0x80), ClassPick::Later);
     }
 
     #[test]
