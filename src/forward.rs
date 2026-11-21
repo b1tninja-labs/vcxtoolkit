@@ -1159,6 +1159,32 @@ pub fn wire_can(
     })
 }
 
+/// Fields `0x0802DD94` writes into the destination record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Staged {
+    /// Byte stored at offset 0. It is 3.
+    pub kind: u8,
+    /// Halfword stored at offset 2. It is the source byte at offset `0x0C`.
+    pub half: u16,
+    /// Dword stored at offset `0x18`. It is the source dword at offset 0.
+    pub dword: u32,
+}
+
+/// What `0x0802DD94` stores after it logs the dword at destination offset `0x10`.
+///
+/// The source dword is written at offset `0x18`. The source byte at offset
+/// `0x0C` is written as a halfword at offset 2. The kind byte is then set to
+/// 3. The call that follows, `0x08011E22`, lands inside another routine, so
+/// the bytes it moves are not represented here.
+#[must_use]
+pub fn stage_record(dword: u32, mark: u8) -> Staged {
+    Staged {
+        kind: 3,
+        half: u16::from(mark),
+        dword,
+    }
+}
+
 /// The `AddTimer` record `FUN_10007a10` sends for one stopped id.
 ///
 /// The stored slot is `id - 1`, wrapping the way a byte subtract does.
@@ -1181,8 +1207,9 @@ mod tests {
         add_filter, add_timer, battery_reading, baud_record, close_payload, config_records,
         copied_data, delivered_len, fast_init, five_baud_payload, j1850_check, lookup_record,
         mixed_bit, open_code, open_payload, pdu_flags, periodic_timer, reply_protocol, rx_status,
-        send_payload, set_com_param, set_filter_payload, set_timer_payload, start_filter,
-        start_payload, stop_filter, stop_payload, stop_timer, uart_sum, wire_can, wire_id,
+        send_payload, set_com_param, set_filter_payload, set_timer_payload, stage_record,
+        start_filter, start_payload, stop_filter, stop_payload, stop_timer, uart_sum, wire_can,
+        wire_id,
     };
 
     #[test]
@@ -1203,6 +1230,14 @@ mod tests {
         assert_eq!(wire_can(5, 0, 2, 0, 1, false).unwrap().length, 7);
         assert_eq!(wire_can(1, 0, 0, 0, 0x1_0000, false).unwrap().length, 4);
         assert_eq!(wire_can(0, 0, 0, 0, 0, true), None);
+    }
+
+    #[test]
+    fn a_staged_record_keeps_the_dword_and_the_mark_byte() {
+        let staged = stage_record(0x1122_3344, 0x0a);
+        assert_eq!(staged.kind, 3);
+        assert_eq!(staged.half, 0x0a);
+        assert_eq!(staged.dword, 0x1122_3344);
     }
 
     #[test]
