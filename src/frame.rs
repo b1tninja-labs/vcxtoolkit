@@ -307,6 +307,47 @@ pub fn device_frame(header: [u8; 4], payload: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Most bytes `0x0801BECA` keeps after undoing [`PLUS_ESCAPE`].
+///
+/// The compare is `unstuffed < 0x1003`.
+pub const PLUS_BODY_MAX: usize = 0x1002;
+
+/// Undo the `0xAA` escape in one interior, the bytes between `0xBB` and `0xEE`.
+///
+/// A stuffed interior shorter than 2 bytes is `None`. An `0xAA` with no
+/// following byte is `None`. The device reads that next byte with no separate
+/// end check. Each escaped byte is `next | (next << 4)`, so `0x0A` is `0xAA`,
+/// `0x0B` is `0xBB`, and `0x0E` is `0xEE`. The first plain byte is header byte
+/// 2. The device also stores header byte 0 as 0. The last plain byte is the
+/// checksum. The bytes between them are the payload, and the stored length is
+/// the plain length minus 2. A plain length below 2, or above
+/// [`PLUS_BODY_MAX`], is `None`.
+#[must_use]
+pub fn plus_body(stuffed: &[u8]) -> Option<(u8, Vec<u8>, u8)> {
+    if stuffed.len() < 2 {
+        return None;
+    }
+    let mut plain = Vec::with_capacity(stuffed.len());
+    let mut index = 0;
+    while index < stuffed.len() {
+        if stuffed[index] == PLUS_ESCAPE {
+            let next = *stuffed.get(index + 1)?;
+            plain.push(next | (next << 4));
+            index += 2;
+        } else {
+            plain.push(stuffed[index]);
+            index += 1;
+        }
+    }
+    if plain.len() < 2 || plain.len() > PLUS_BODY_MAX {
+        return None;
+    }
+    let command = plain[0];
+    let checksum_byte = plain[plain.len() - 1];
+    let payload = plain[1..plain.len() - 1].to_vec();
+    Some((command, payload, checksum_byte))
+}
+
 fn write_stuffed(out: &mut Vec<u8>, bytes: &[u8]) {
     for byte in bytes {
         if *byte == MARKER || *byte == ESCAPE || *byte == ESCAPE_ALSO {
@@ -321,9 +362,9 @@ fn write_stuffed(out: &mut Vec<u8>, bytes: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::{
-        ESCAPE, ESCAPE_ALSO, FrameError, MARKER, MAX_PAYLOAD, MAX_SEND, PLUS_END, SendCut,
-        checksum, device_frame, device_will_send, marker_wrap, pack, queued_body, recv_length,
-        send_cut, unpack,
+        ESCAPE, ESCAPE_ALSO, FrameError, MARKER, MAX_PAYLOAD, MAX_SEND, PLUS_BODY_MAX, PLUS_END,
+        PLUS_ESCAPE, SendCut, checksum, device_frame, device_will_send, marker_wrap, pack,
+        plus_body, queued_body, recv_length, send_cut, unpack,
     };
 
     #[test]
@@ -439,5 +480,20 @@ mod tests {
             device_frame(other, &[PLUS_END, 0x01]).unwrap(),
             vec![MARKER, 0xAA, 0x0B, 0xAA, 0x0E, 0x01, 0xAA, 0x0A, PLUS_END]
         );
+    }
+
+    #[test]
+    fn an_aa_escape_comes_back_out_of_the_interior() {
+        let header = [0x00, 0x00, 0x11, 0x00];
+        let payload = [PLUS_ESCAPE, MARKER, PLUS_END];
+        let wire = device_frame(header, &payload).unwrap();
+        let (command, body, sum) = plus_body(&wire[1..wire.len() - 1]).unwrap();
+        assert_eq!(command, 0x11);
+        assert_eq!(body, payload);
+        assert_eq!(sum, checksum(header, &payload));
+        assert_eq!(plus_body(&[0x11, 0x11]), Some((0x11, vec![], 0x11)));
+        assert_eq!(plus_body(&[PLUS_ESCAPE]), None);
+        assert_eq!(plus_body(&[0x11]), None);
+        assert_eq!(plus_body(&vec![0x01; PLUS_BODY_MAX + 1]), None);
     }
 }

@@ -67,9 +67,9 @@ pub use forward::{
     start_payload, stop_filter, stop_payload, stop_timer, uart_sum,
 };
 pub use frame::{
-    DEVICE_CHECKSUM, Frame, FrameError, MAX_PAYLOAD, MAX_SEND, PLUS_END, PLUS_ESCAPE, QueuedBody,
-    SendCut, checksum, device_frame, device_will_send, marker_wrap, pack, queued_body, recv_length,
-    send_cut, unpack,
+    DEVICE_CHECKSUM, Frame, FrameError, MAX_PAYLOAD, MAX_SEND, PLUS_BODY_MAX, PLUS_END,
+    PLUS_ESCAPE, QueuedBody, SendCut, checksum, device_frame, device_will_send, marker_wrap, pack,
+    plus_body, queued_body, recv_length, send_cut, unpack,
 };
 pub use image::{
     ImageError, ImageHeader, PageRecord, file_is_newer, read_header, read_pages, version_is_newer,

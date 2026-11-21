@@ -85,6 +85,14 @@ is not `0x80`, only header byte 2 and the payload are summed, and the wire
 frame opens with `0xBB`, escapes `0xAA`, `0xBB`, and `0xEE` as `AA 0A`,
 `AA 0B`, and `AA 0E`, and closes with `0xEE`.
 
+`0x0801C294` reads one of those frames back. It picks the `0xDD` unstuffer
+when a saved byte is `0x80`, and `0x0801BECA` otherwise. That unstuffer
+requires at least 2 stuffed bytes. An `0xAA` takes the next byte as
+`next | (next << 4)`. A plain result shorter than 2, or longer than `0x1002`,
+is refused. Header byte 0 is stored as 0, header byte 2 is the first plain
+byte, the last plain byte is the checksum, and the stored length is the plain
+length minus 2.
+
 The same wait, at `0x7B2F4C90`, is what the command functions call after a send.
 It compares queued header byte 2 with the command byte of the request. A match
 returns 1. A queued `0x86` with a payload of at least 5 bytes stores the same
