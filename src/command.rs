@@ -8,7 +8,8 @@
 //! not an immediate in the clear exports. The eight-byte frame before it is
 //! header `80 00 A0 00`. Third bytes `0x44`, `0x46`, `0x81`, `0x82`, `0x84`,
 //! `0x87`, `0x91`, `0xA0`, `0xF4`, and `0xF6` have no named sender. `0x91` is
-//! the `VCX_ERR_INVALID_CMD` return.
+//! the `VCX_ERR_INVALID_CMD` return. `VCX_DEV_Config` sends `0x90` and
+//! `0x92` through `0x99`. Its switch sends selector `0x91` nowhere.
 
 /// One command header, named the way the DLL logs the sender.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -166,9 +167,45 @@ pub const fn pro_send_header(second: u8, fourth: u8) -> [u8; 4] {
     [0x80, second, 0x00, fourth]
 }
 
+/// How many bytes `VCX_DEV_Config` copies for one selector.
+///
+/// `send` is the payload copied from the caller buffer. `recv` is how many
+/// reply-payload bytes are copied back into that buffer, starting at the
+/// first payload byte. The received length must be at least `recv + 1`.
+/// The extra byte is not copied. Selector `0x91` is not a copy: the switch
+/// returns `0x91` and does not send.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConfigCopy {
+    /// Payload bytes taken from the caller buffer. Zero sends an empty payload.
+    pub send: usize,
+    /// Reply payload bytes written back. The reply must be at least one byte longer.
+    pub recv: usize,
+}
+
+/// The copy lengths for a `VCX_DEV_Config` selector.
+///
+/// The selector is header byte 2. A command this function does not return is
+/// not one of those nine sends.
+#[must_use]
+pub const fn config_copy(command: Command) -> Option<ConfigCopy> {
+    let (send, recv) = match command {
+        Command::SetFrame => (2, 0),
+        Command::SetCom => (8, 0),
+        Command::GetCom => (0, 8),
+        Command::SetBt => (0x28, 0),
+        Command::GetBt => (0, 0x28),
+        Command::SetLan => (0x0C, 0),
+        Command::GetLan => (0, 0x0C),
+        Command::SetWlan => (0x2C, 0),
+        Command::GetWlan => (0, 0x2C),
+        _ => return None,
+    };
+    Some(ConfigCopy { send, recv })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Command, pro_send_header};
+    use super::{Command, ConfigCopy, config_copy, pro_send_header};
 
     fn every() -> [Command; 36] {
         [
@@ -268,6 +305,66 @@ mod tests {
         );
         assert_eq!(Command::from_header([0x81, 0x00, 0x40, 0x00]), None);
         assert_eq!(Command::from_header([0x80, 0x01, 0x40, 0x00]), None);
+    }
+
+    #[test]
+    fn config_copies_the_selector_lengths() {
+        assert_eq!(
+            config_copy(Command::SetFrame),
+            Some(ConfigCopy { send: 2, recv: 0 })
+        );
+        assert_eq!(
+            config_copy(Command::SetCom),
+            Some(ConfigCopy { send: 8, recv: 0 })
+        );
+        assert_eq!(
+            config_copy(Command::GetCom),
+            Some(ConfigCopy { send: 0, recv: 8 })
+        );
+        assert_eq!(
+            config_copy(Command::SetBt),
+            Some(ConfigCopy {
+                send: 0x28,
+                recv: 0
+            })
+        );
+        assert_eq!(
+            config_copy(Command::GetBt),
+            Some(ConfigCopy {
+                send: 0,
+                recv: 0x28
+            })
+        );
+        assert_eq!(
+            config_copy(Command::SetLan),
+            Some(ConfigCopy {
+                send: 0x0C,
+                recv: 0
+            })
+        );
+        assert_eq!(
+            config_copy(Command::GetLan),
+            Some(ConfigCopy {
+                send: 0,
+                recv: 0x0C
+            })
+        );
+        assert_eq!(
+            config_copy(Command::SetWlan),
+            Some(ConfigCopy {
+                send: 0x2C,
+                recv: 0
+            })
+        );
+        assert_eq!(
+            config_copy(Command::GetWlan),
+            Some(ConfigCopy {
+                send: 0,
+                recv: 0x2C
+            })
+        );
+        assert_eq!(config_copy(Command::GetInfo), None);
+        assert_eq!(config_copy(Command::Echo), None);
     }
 
     #[test]

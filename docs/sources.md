@@ -37,7 +37,13 @@ first try. The driver reported 921600, 8N1, DTR enabled, that timeout pattern, a
 The third header byte is the command. `VCX_PRO_Send` is the exception: its header is
 `80`, a caller byte, `00`, and another caller byte. `VCX_PRO_GetComParam` and
 `VCX_PRO_Clear` do not write a header. `VCX_DEV_Config` returns `0x91` and logs
-`VCX_ERR_INVALID_CMD` for a third byte it does not send. `VCX_DEV_Reset` and
+`VCX_ERR_INVALID_CMD` for a third byte it does not send, including selector
+`0x91` itself. The nine selectors it does send copy a fixed length from the
+caller buffer and, for a get, copy that many reply bytes back. The reply
+must be at least one byte longer than the copy. `config_copy` is those two
+lengths: `SetFrame` 2 and 0, `SetCom` 8 and 0, `GetCom` 0 and 8, `SetBt`
+`0x28` and 0, `GetBt` 0 and `0x28`, `SetLan` `0x0C` and 0, `GetLan` 0 and
+`0x0C`, `SetWlan` `0x2C` and 0, `GetWlan` 0 and `0x2C`. `VCX_DEV_Reset` and
 `VCX_DEV_ResetEx` both write `0x8D`. The names and bytes are the `Command` enum.
 
 ## GetInfo fields

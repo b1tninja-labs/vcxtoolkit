@@ -265,9 +265,6 @@ protocol returns `0x0A`. Any other protocol returns 1. Both pass timeout
   `GetLicense` request, the `80 00 A0 00` exchange, and the eight key bytes
   are recovered.
 - The bytes `VCX_PRO_Recv` writes at PDU offset 6.
-- The third argument of `ProOpen`, beyond the protocol dword `open_code` returns.
-  `ProStart` is `0` when connect calls it. `SetFilter` is `1` or `2`.
-  `SetTimer` is `1` or `2`.
 - The caller's data bytes at a Send PDU's offset 6. The prefix, the flag map,
   the mixed-format bit, and the trailing check byte are packed.
 - The word `FIVE_BAUD_INIT` copies out of a queued message. That word is
