@@ -17,6 +17,7 @@
 //! `comm_interface` is the type and profile `VCX_GetCommIf` copies.
 //! The caller's data is not invented here.
 //! `pci_type` names the first byte when that data is already an ISO 15765 frame.
+//! `flow_control` names the three bytes that follow when that byte is flow control.
 //! On Windows it opens the USB serial port and exchanges one frame.
 //! It does not write the license or the firmware to the device, and it does not
 //! program a vehicle.
@@ -85,7 +86,10 @@ pub use license_info::{
 };
 #[cfg(windows)]
 pub use license_info::{LicenseReadError, read_license};
-pub use pci::{NEGATIVE_RESPONSE, PciType, pci_type, single_service};
+pub use pci::{
+    FlowControl, FlowStatus, NEGATIVE_RESPONSE, PciType, Separation, flow_control, pci_type,
+    single_service,
+};
 pub use remote::{
     FIRMWARE_CATALOG, HttpFailure, LICENSE_SERVER, RemoteError, auth_url, decode_license,
     license_url,

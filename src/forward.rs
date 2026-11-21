@@ -771,7 +771,9 @@ pub struct FilterCopy<'a> {
     pub pattern: &'a [u8],
     /// Mask bytes.
     pub mask: &'a [u8],
-    /// Flow-control bytes. Used when `kind` is `3`.
+    /// Flow-control bytes. Used when `kind` is `3`, and the same length as the
+    /// pattern. These are the caller's filter bytes, not the three-byte
+    /// flow-control PCI.
     pub flow: &'a [u8],
     /// Mask flag `0x100` is set, so pattern byte 0 gains bit `0x80`.
     pub extend_first: bool,

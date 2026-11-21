@@ -270,6 +270,48 @@ flowchart LR
   sf --> sid["byte 1 is the service id when the low nibble fits"]
 ```
 
+A flow-control PCI is three bytes. ISO 15765-2:2016 §9.6.5.1 Table 18 puts
+the status in the low nibble: `0000` continue, `0001` wait, `0010` overflow,
+and `0011`–`1111` reserved. §9.6.5.3 puts the block size in byte 2. A block
+size of 0 means the sender finishes without another flow-control frame.
+§9.6.5.4 Table 20 puts the separation time in byte 3: `0x00`–`0x7F` are
+milliseconds, `0xF1`–`0xF9` are 100 µs through 900 µs, and `0x80`–`0xF0` and
+`0xFA`–`0xFF` are reserved. §9.6.5.5 says a sender that receives a reserved
+separation time uses 127 ms for the rest of that message. `flow_control`
+keeps the received byte. For wait and overflow, §9.6.5.1 says the block size
+and the separation time are ignored. The reader still returns both.
+
+`start_filter` copies a kind-3 filter's flow bytes at the same length as the
+pattern, up to 12 bytes. Those bytes are not these three. Config key `0x23`
+with value `4` is that record. It is not the block size.
+
+§10.3.1 names three addressing formats, and §10.3.3 adds normal fixed as a
+form of normal addressing. For normal and normal fixed, the PCI is the first
+CAN data byte (§10.3.2, §10.3.3). Extended addressing puts `N_TA` in that byte
+and the PCI in the next (§10.3.4). Mixed addressing puts `N_AE` in that byte
+and the PCI in the next (§10.3.5). `pci_type`, `single_service`, and
+`flow_control` start at the PCI byte. They do not skip an address byte,
+because the copy does not say which format the caller used. `mixed_bit` is the
+DLL flag logged as `CAN_MIXED_FORMAT` when an ISO 15765 channel carries a raw
+CAN message. It is not `N_AE`, and it is not the mixed addressing format.
+Table 4 says functional addressing carries a single frame only. This crate
+does not enforce that.
+
+```mermaid
+flowchart TD
+  bytes["CAN data bytes"] --> normal["normal and normal fixed: byte 1 is the PCI"]
+  bytes --> extended["extended: byte 1 is N_TA"]
+  bytes --> mixed["mixed: byte 1 is N_AE"]
+  extended --> pci["PCI byte"]
+  mixed --> pci
+  normal --> pci
+  pci --> flow["high nibble 0011"]
+  flow --> status["low nibble: continue, wait, overflow"]
+  flow --> block["byte 2: block size"]
+  flow --> gap["byte 3: separation time"]
+  kind3["kind 3 filter flow copy"] --> opaque["same length as the pattern"]
+```
+
 `periodic_timer` is the `AddTimer` record. The first copied tail is the
 byte-swapped flag dword and then the same data `copied_data` would place at
 PDU offset 6. The interval is stored times `0x3E8`. Stopping a timer sends a
