@@ -272,6 +272,15 @@ leave poll has the same shape. `Sleep` is `[0x7B2FE0B4]`; its argument is
 `Device Firmware Wrong!`, the caption `Error`, and `0x1010`, then returns
 `0xFF`. This crate does not show that dialog and does not send these commands.
 
+`0x08018A6A` reads the kind byte of a queued record. Kind 2 continues only
+when bit 2 of the byte at `r6 + 0x0C` is set. It sets flag `4`, stores a
+length of the extra byte plus 4, and writes kind 3. Kinds 1 and 5 store a
+length of the extra byte plus the count dword plus 4, and write kind 0.
+`0x08018A8E` turns the id dword into the stored id: bits 24..28 become bits
+0..4, and the other three bytes swap places. Bit 31 of the original dword
+sets flag `0x100`. A non-zero extra byte sets flag `0x400` and the following
+byte is kept. The stored length is the low 16 bits.
+
 The DoIP row is a different worker (`0x004363D0`). It sends `\openwrt.bin` through
 `ZWSFirmwareUpdate`, not through ordinal `0x27`. A Nano window leaves that byte clear,
 so that pass does not transfer.

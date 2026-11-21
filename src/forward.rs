@@ -3,7 +3,8 @@
 //! `PassThruWriteMsgs` (`0x100039e0`) calls `FUN_10005df0`, which copies the
 //! caller's data to PDU offset 6. `VCX_PRO_Send` (`0x7B2F5740`) then stores that
 //! dword big-endian, the length big-endian, and those bytes. `FUN_10005a20`
-//! is the dword `VCX_PRO_Open` is given. Nothing here opens a port.
+//! is the dword `VCX_PRO_Open` is given. `wire_id` is the id the device stores
+//! from a queued record. Nothing here opens a port.
 
 /// Largest data copy `FUN_10005df0` and `VCX_PRO_Send` accept.
 pub const MAX_FORWARD: usize = 0x1020;
@@ -1088,6 +1089,76 @@ pub fn periodic_timer(message: &Periodic<'_>) -> Result<TimerRecord, ForwardErro
     })
 }
 
+/// Id `0x08018A8E` stores from the dword at record offset `0x14`.
+///
+/// Bits 24..28 become bits 0..4. Bits 29..31 are left out. Bits 16..23 move
+/// to bits 8..15, bits 8..15 move to bits 16..23, and bits 0..7 move to bits
+/// 24..31.
+#[must_use]
+pub fn wire_id(value: u32) -> u32 {
+    ((value >> 24) & 0x1f) | ((value >> 8) & 0xff00) | ((value << 8) & 0x00ff_0000) | (value << 24)
+}
+
+/// Header `0x08018A6A` writes for record kinds 1, 2, and 5.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WiredCan {
+    /// Flag word. Kind 2 sets bit 2. Bit 31 of the id sets `0x100`. A non-zero
+    /// extra byte sets `0x400`.
+    pub flags: u32,
+    /// Low 16 bits of the length the device stores.
+    pub length: u16,
+    /// [`wire_id`] of the record dword.
+    pub id: u32,
+    /// Byte at record offset `0x19`, present when the extra byte is not 0.
+    pub mark: Option<u8>,
+    /// Value stored back into the kind byte.
+    pub kind_after: u8,
+}
+
+/// What `0x08018A6A` keeps of one queued record.
+///
+/// The kind byte is at offset 0. Kind 2 continues only when `gate` is set,
+/// which is bit 2 of the byte at `r6 + 0x0C`. It then sets flag `4`, stores
+/// `extra + 4`, and writes kind 3. Kinds 1 and 5 store `extra + count + 4`
+/// and write kind 0. Any other kind returns `None`. Kind 5 also calls
+/// `0x08011D7A`, which is the tail of a copy loop, so the bytes it moves are
+/// not represented here.
+#[must_use]
+pub fn wire_can(
+    kind: u8,
+    id: u32,
+    extra: u8,
+    mark: u8,
+    count: u32,
+    gate: bool,
+) -> Option<WiredCan> {
+    if kind == 2 && !gate {
+        return None;
+    }
+    let (length, kind_after, mut flags) = match kind {
+        2 => (u32::from(extra) + 4, 3, 4),
+        1 | 5 => (u32::from(extra) + count + 4, 0, 0),
+        _ => return None,
+    };
+    if id & 0x8000_0000 != 0 {
+        flags |= 0x100;
+    }
+    let kept = if extra == 0 {
+        None
+    } else {
+        flags |= 0x400;
+        Some(mark)
+    };
+    let bytes = length.to_le_bytes();
+    Some(WiredCan {
+        flags,
+        length: u16::from_le_bytes([bytes[0], bytes[1]]),
+        id: wire_id(id),
+        mark: kept,
+        kind_after,
+    })
+}
+
 /// The `AddTimer` record `FUN_10007a10` sends for one stopped id.
 ///
 /// The stored slot is `id - 1`, wrapping the way a byte subtract does.
@@ -1111,8 +1182,28 @@ mod tests {
         copied_data, delivered_len, fast_init, five_baud_payload, j1850_check, lookup_record,
         mixed_bit, open_code, open_payload, pdu_flags, periodic_timer, reply_protocol, rx_status,
         send_payload, set_com_param, set_filter_payload, set_timer_payload, start_filter,
-        start_payload, stop_filter, stop_payload, stop_timer, uart_sum,
+        start_payload, stop_filter, stop_payload, stop_timer, uart_sum, wire_can, wire_id,
     };
+
+    #[test]
+    fn a_29_bit_id_keeps_five_bits_of_its_top_byte() {
+        assert_eq!(wire_id(0x9abc_def0), 0xf0de_bc1a);
+        let wired = wire_can(2, 0x8000_0001, 1, 0x22, 0, true).unwrap();
+        assert_eq!(wired.flags, 4 | 0x100 | 0x400);
+        assert_eq!(wired.id, 0x0100_0000);
+        assert_eq!(wired.length, 5);
+        assert_eq!(wired.mark, Some(0x22));
+        assert_eq!(wired.kind_after, 3);
+        assert_eq!(wire_can(2, 1, 0, 0, 0, false), None);
+        let other = wire_can(1, 0x11, 0, 0x99, 6, false).unwrap();
+        assert_eq!(other.flags, 0);
+        assert_eq!(other.length, 10);
+        assert_eq!(other.mark, None);
+        assert_eq!(other.kind_after, 0);
+        assert_eq!(wire_can(5, 0, 2, 0, 1, false).unwrap().length, 7);
+        assert_eq!(wire_can(1, 0, 0, 0, 0x1_0000, false).unwrap().length, 4);
+        assert_eq!(wire_can(0, 0, 0, 0, 0, true), None);
+    }
 
     #[test]
     fn iso15765_opens_as_0x8001() {
