@@ -1174,14 +1174,49 @@ pub struct Staged {
 ///
 /// The source dword is written at offset `0x18`. The source byte at offset
 /// `0x0C` is written as a halfword at offset 2. The kind byte is then set to
-/// 3. The call that follows, `0x08011E22`, lands inside another routine, so
-/// the bytes it moves are not represented here.
+/// 3. The call that follows enters the XXTEA mix at `0x08011E22`, so those
+/// source bytes are not decrypted here.
 #[must_use]
 pub fn stage_record(dword: u32, mark: u8) -> Staged {
     Staged {
         kind: 3,
         half: u16::from(mark),
         dword,
+    }
+}
+
+/// Slots in the queue object `0x08019466` indexes.
+pub const QUEUE_SLOTS: u8 = 10;
+
+/// Bytes from one slot to the next. The first slot is at object offset `0xA5C`.
+pub const QUEUE_STRIDE: usize = 0x2C;
+
+/// Object offset of slot 0. It is `0xA50 + 0x0C`.
+pub const QUEUE_SLOT_BASE: usize = 0xA5C;
+
+/// Where one record sits, and whether the later update runs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QueuePlace {
+    /// First byte of the record after `byte % 10`.
+    pub index: u8,
+    /// Offset of that slot from the start of the queue object.
+    pub offset: usize,
+    /// False when the byte at offset 2 is `0x11` or greater. The index is still
+    /// reduced. The occupancy word and the rest of the update are skipped.
+    pub kept: bool,
+}
+
+/// Slot `0x08019466` picks from the record's first byte and the byte at offset 2.
+///
+/// The index is that first byte modulo 10, and it is written back. The slot is
+/// `0xA5C + index * 0x2C`. A byte at offset 2 of `0x11` or more skips the update.
+#[must_use]
+pub fn place_queue(first: u8, at_2: u8) -> QueuePlace {
+    let index = first % QUEUE_SLOTS;
+    QueuePlace {
+        index,
+        offset: QUEUE_SLOT_BASE + usize::from(index) * QUEUE_STRIDE,
+        kept: at_2 < 0x11,
     }
 }
 
@@ -1206,10 +1241,10 @@ mod tests {
         FilterRecord, ForwardError, INIT_WAIT, Periodic, TIMER_CLEAR, TIMER_PASS, TimerRecord,
         add_filter, add_timer, battery_reading, baud_record, close_payload, config_records,
         copied_data, delivered_len, fast_init, five_baud_payload, j1850_check, lookup_record,
-        mixed_bit, open_code, open_payload, pdu_flags, periodic_timer, reply_protocol, rx_status,
-        send_payload, set_com_param, set_filter_payload, set_timer_payload, stage_record,
-        start_filter, start_payload, stop_filter, stop_payload, stop_timer, uart_sum, wire_can,
-        wire_id,
+        mixed_bit, open_code, open_payload, pdu_flags, periodic_timer, place_queue, reply_protocol,
+        rx_status, send_payload, set_com_param, set_filter_payload, set_timer_payload,
+        stage_record, start_filter, start_payload, stop_filter, stop_payload, stop_timer, uart_sum,
+        wire_can, wire_id,
     };
 
     #[test]
@@ -1238,6 +1273,18 @@ mod tests {
         assert_eq!(staged.kind, 3);
         assert_eq!(staged.half, 0x0a);
         assert_eq!(staged.dword, 0x1122_3344);
+    }
+
+    #[test]
+    fn a_queue_index_is_the_first_byte_modulo_ten() {
+        let placed = place_queue(25, 0x10);
+        assert_eq!(placed.index, 5);
+        assert_eq!(placed.offset, 0xA5C + 5 * 0x2C);
+        assert!(placed.kept);
+        let skipped = place_queue(10, 0x11);
+        assert_eq!(skipped.index, 0);
+        assert_eq!(skipped.offset, 0xA5C);
+        assert!(!skipped.kept);
     }
 
     #[test]

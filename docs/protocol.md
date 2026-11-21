@@ -274,8 +274,13 @@ leave poll has the same shape. `Sleep` is `[0x7B2FE0B4]`; its argument is
 
 `0x0802DD94` logs the dword already at destination offset `0x10`, then stores
 the source dword at offset `0x18` and the source byte at offset `0x0C` as a
-halfword at offset 2. It sets the kind byte to 3. The call after those stores
-lands inside another routine.
+halfword at offset 2. It sets the kind byte to 3. The call after those stores enters the XXTEA mix
+at `0x08011E22`, so those source bytes are not decrypted.
+
+`0x08019466` takes a queue object and a record. The record's first byte is
+replaced by that byte modulo 10. The slot is at object offset
+`0xA5C + index * 0x2C`. A byte at record offset 2 of `0x11` or more skips the
+rest of the update. The index is still reduced.
 
 `0x08018A6A` reads the kind byte of a queued record. Kind 2 continues only
 when bit 2 of the byte at `r6 + 0x0C` is set. It sets flag `4`, stores a

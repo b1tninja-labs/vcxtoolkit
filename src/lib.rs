@@ -59,13 +59,13 @@ pub use dfu::{
 pub use exchange::{ExchangeError, exchange};
 pub use forward::{
     BATTERY_QUERY, BATTERY_SEED, ChannelFields, ComRecord, FILTER_CLEAR, FILTER_PASS, FilterCopy,
-    FilterRecord, ForwardError, INIT_WAIT, MAX_FORWARD, Periodic, START_MODE, Staged, TIMER_CLEAR,
-    TIMER_PASS, TimerRecord, WiredCan, add_filter, add_timer, battery_reading, baud_record,
-    close_payload, config_records, copied_data, delivered_len, fast_init, five_baud_payload,
-    j1850_check, lookup_record, mixed_bit, open_code, open_payload, pdu_flags, periodic_timer,
-    reply_protocol, rx_status, send_payload, set_com_param, set_filter_payload, set_timer_payload,
-    stage_record, start_filter, start_payload, stop_filter, stop_payload, stop_timer, uart_sum,
-    wire_can, wire_id,
+    FilterRecord, ForwardError, INIT_WAIT, MAX_FORWARD, Periodic, QueuePlace, START_MODE, Staged,
+    TIMER_CLEAR, TIMER_PASS, TimerRecord, WiredCan, add_filter, add_timer, battery_reading,
+    baud_record, close_payload, config_records, copied_data, delivered_len, fast_init,
+    five_baud_payload, j1850_check, lookup_record, mixed_bit, open_code, open_payload, pdu_flags,
+    periodic_timer, place_queue, reply_protocol, rx_status, send_payload, set_com_param,
+    set_filter_payload, set_timer_payload, stage_record, start_filter, start_payload, stop_filter,
+    stop_payload, stop_timer, uart_sum, wire_can, wire_id,
 };
 pub use frame::{
     DEVICE_CHECKSUM, Frame, FrameError, MAX_PAYLOAD, MAX_SEND, PLUS_BODY_MAX, PLUS_END,
