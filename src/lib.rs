@@ -14,12 +14,14 @@
 //! `plan_firmware` names those steps, and `hold` refuses the ones that would
 //! be sent. The pass-through reads are planned in `docs/reads.md`.
 //! `open_code` and `send_payload` are the bytes the pass-through copies.
+//! `comm_interface` is the type and profile `VCX_GetCommIf` copies.
 //! The caller's data is not invented here.
 //! On Windows it opens the USB serial port and exchanges one frame.
 //! It does not write the license or the firmware to the device, and it does not
 //! program a vehicle.
 
 mod catalog;
+mod comm;
 mod command;
 mod dfu;
 mod exchange;
@@ -34,6 +36,13 @@ mod serial;
 mod update;
 
 pub use catalog::{FirmwareItem, firmware_for, newer_firmware, parse_catalog};
+pub use comm::{
+    ADDRESS_MARK, ALT_MARK, AddressWrite, COMM_BYTE_SIZE, COMM_COPY, COMM_PARITY, COMM_PROFILE,
+    CommError, PROFILE_BAUD, PROFILE_DELAY, PROFILE_NAME, PROFILE_NAME_LEN, PROFILE_PORT,
+    TYPE_4_WRITES, TYPE_8_WRITE, TYPE0_BAUD, TYPE01_DELAY, TYPE1_NAMES, TYPE2_DELAY, TYPE2_NAMES,
+    TYPE12_BAUD, baud_in_use, comm_interface, delay_in_use, profile_dword, profile_name,
+    serial_line,
+};
 pub use command::{
     Command, ConfigCopy, DeviceTime, EXINFO_LEN, EXINFO_MARK, EXINFO_REPLY, ExInfoError,
     PinReading, TEST_COPY, TEST_REPLY, apply_ex_info, config_copy, device_time, get_pin_vol,

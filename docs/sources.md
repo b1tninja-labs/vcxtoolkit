@@ -66,6 +66,25 @@ bytes into the frame and then calls `0xB230`, which is virtualized; the
 length it returns replaces the `0x80`, so the bytes on the wire were not
 recovered. The names and bytes are the `Command` enum.
 
+## Comm profile
+
+`VCX_GetCommIf` at `0x7B2F5250` writes a little-endian type dword and then
+`0x114` bytes. A null device returns `0x80` and a null buffer returns
+`0x94`. The opener at `0x7B2FA680` saved those `0x114` bytes from its
+profile argument. Types 0, 1, and 2 read a dword at `+0`, a dword at `+4`,
+and a dword at `+0x10C`. A zero baud becomes `0xE1000` for type 0 and
+`0x1C200` for types 1 and 2. A zero delay becomes `0xC8` for types 0 and 1
+and `0x5DC` for type 2. A new type 0, 1, or 2 stores byte size 8 and parity
+0 in the working line. The type 1 helper names `Serial` and
+`SerialSTDiscover`. The type 2 helper names `Bt` and `SerialBTDiscover`.
+Types 3 through 8 read a dword at `+0` and `0x40` bytes at `+8`. A requested
+type of `0xFF` probes first. `0x7B2F44D0` checks `192.168.8.1`, then
+`192.168.171.1`, then `192.168.8.1` again, then `192.168.4.1`. The first
+three store mark `0x1AA4` and the fourth stores `0x17`. A positive check
+keeps link type 4. `0x7B2F4690` stores `192.168.9.1` and `0x1AA4`, and a
+positive check keeps link type 8. The remaining probe is the type 0 opener,
+which keeps link type 0.
+
 ## GetInfo fields
 
 `VCX_DEV_GetInfo` copies the reply payload into the caller buffer, skipping the first

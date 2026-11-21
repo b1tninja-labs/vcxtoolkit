@@ -9,6 +9,7 @@
   and the packed page records.
   `license_info` reads the on-device license buffer and derives the key half. `catalog` reads the firmware catalog.
   `remote` retrieves a license and a catalog firmware image. `serial` opens the USB port.
+  `comm` reads the profile `VCX_GetCommIf` copies.
   `dfu` builds the DFU payloads the DLL writes, reads the 8 serial bytes at
   offset `0x14` of a `GetInfo` reply, and rewrites a page in memory.
   `update` describes the firmware-update steps and refuses the ones that would be sent.
