@@ -211,12 +211,21 @@ no page index, and refuses a length above `0x1026`. It does not build the
 this function overwrites it. When that dword is 0 the pointer is `[ESP+0x3C]`,
 a slot this function does not write. Neither is a recovered serial, so the plan
 does not build the 8 bytes. On that zero-pointer path the function loads 10
-into `ESI` and polls `GetMode` until the reply byte is 0. The boot-mode poll,
-after `SetMode 0xA5`, decrements a stack dword and stops when the reply byte is
-`0xA5`. The plain instructions do not show that dword's initial value. The
-indirect calls through `[0x7B2FE0B4]` (immediate `0x1F4`) and `[0x7B2FE13C]`
-(immediate `0x1010`) were not resolved to named imports. The slots hold
-`70 D7 1B 75` and `20 FE 26 76`. This crate does not send these commands.
+into `ESI` and polls `GetMode` until the reply byte is 0.
+
+The boot-mode poll, after `SetMode 0xA5`, uses the same 10. The store is
+`[esp+0x20] = 10` while the three log arguments are still pushed, and
+`add esp, 0xC` makes that slot `[esp+0x14]`. Each pass calls `Sleep` and then
+`GetMode`. The counter is decremented after the pass, and the pass repeats
+while the value before the decrement was not 0, so the body runs 11 times
+unless the reply byte is already `0xA5`. `poll_passes` is that count. The
+leave poll has the same shape. `Sleep` is `[0x7B2FE0B4]`; its argument is
+`0x1F4`. The dumped kernel32 base plus the `Sleep` export offset is
+`0x751BD770`, the value in that slot.
+
+`[0x7B2FE13C]` is `MessageBoxA`. The name refusal pushes a null owner, the text
+`Device Firmware Wrong!`, the caption `Error`, and `0x1010`, then returns
+`0xFF`. This crate does not show that dialog and does not send these commands.
 
 The DoIP row is a different worker (`0x004363D0`). It sends `\openwrt.bin` through
 `ZWSFirmwareUpdate`, not through ordinal `0x27`. A Nano window leaves that byte clear,

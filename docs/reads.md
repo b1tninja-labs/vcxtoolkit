@@ -273,6 +273,6 @@ protocol returns `0x0A`. Any other protocol returns 1. Both pass timeout
 - The word `FIVE_BAUD_INIT` copies out of a queued message. That word is
   whatever arrived, not a constant.
 - The `0x800E` phase record when the pin word is not `0x060E`. The builder does not store it.
-- The boot-mode poll's starting count, the `WrSerial` pointer, and the indirect
-  slots `[0x7B2FE0B4]` and `[0x7B2FE13C]`, which belong to the update in
-  [protocol.md](protocol.md) and are not vehicle reads.
+- The `WrSerial` pointer. The boot-mode poll starts at 10 and the indirect
+  slots are `Sleep` and `MessageBoxA`, in [protocol.md](protocol.md). Those
+  are not vehicle reads.

@@ -7,8 +7,8 @@
 
 use crate::Command;
 use crate::dfu::{
-    BOOT_MODE, Built, DFU_NAME_OFFSET, LEAVE_MODE, dfu_get_info, erase_chip, flash_length_fits,
-    get_mode, in_boot, set_mode,
+    BOOT_MODE, BOOT_POLLS, Built, DFU_NAME_OFFSET, LEAVE_MODE, POLL_WAIT, dfu_get_info, erase_chip,
+    flash_length_fits, get_mode, in_boot, set_mode,
 };
 use crate::image::{ImageError, file_is_newer, read_header, read_pages};
 
@@ -34,9 +34,15 @@ pub enum UpdateStep {
     Send(Built),
     /// `GetMode` again, until the reply byte is [`BOOT_MODE`](crate::BOOT_MODE).
     ///
-    /// The plain instructions decrement a stack dword. They do not show its
-    /// initial value, so this step has no count.
-    BootPoll,
+    /// `initial` is the counter stored before the first pass. Each pass calls
+    /// `Sleep` for `delay_ms` and then `GetMode`. The pass repeats while the
+    /// counter before the decrement was not 0.
+    BootPoll {
+        /// Counter stored before the first pass.
+        initial: u8,
+        /// `Sleep` argument, in milliseconds.
+        delay_ms: u32,
+    },
     /// Eight bytes at [`DFU_NAME_OFFSET`] of the DFU `GetInfo` buffer.
     ///
     /// The reply was not read, so the step stores the offset and not a name.
@@ -173,7 +179,10 @@ pub fn plan_firmware(
                 > u32::from_be_bytes(header.version),
         });
         steps.push(UpdateStep::Send(set_mode(BOOT_MODE)));
-        steps.push(UpdateStep::BootPoll);
+        steps.push(UpdateStep::BootPoll {
+            initial: BOOT_POLLS,
+            delay_ms: POLL_WAIT,
+        });
     }
     steps.push(UpdateStep::Send(dfu_get_info()));
     steps.push(UpdateStep::Name {
@@ -213,7 +222,7 @@ pub fn hold(step: &UpdateStep) -> Result<Kept, Refused> {
             command: built.command,
             payload_len: built.payload.len(),
         }),
-        UpdateStep::BootPoll => Err(Refused::WouldSend {
+        UpdateStep::BootPoll { .. } => Err(Refused::WouldSend {
             command: Command::DfuGetMode,
             payload_len: 0,
         }),
@@ -276,6 +285,13 @@ mod tests {
             }
         )));
         assert!(plan.steps.contains(&UpdateStep::Serial));
+        assert!(plan.steps.iter().any(|step| matches!(
+            step,
+            UpdateStep::BootPoll {
+                initial: 10,
+                delay_ms: 0x1F4,
+            }
+        )));
     }
 
     #[test]
@@ -307,7 +323,12 @@ mod tests {
                 .iter()
                 .any(|step| matches!(step, UpdateStep::Version { .. }))
         );
-        assert!(!plan.steps.contains(&UpdateStep::BootPoll));
+        assert!(
+            !plan
+                .steps
+                .iter()
+                .any(|step| matches!(step, UpdateStep::BootPoll { .. }))
+        );
         assert!(sent.contains(&(Command::DfuGetInfo, Vec::new())));
         assert!(sent.contains(&(Command::DfuErChip, Vec::new())));
         assert!(sent.contains(&(Command::DfuSetMode, vec![0])));

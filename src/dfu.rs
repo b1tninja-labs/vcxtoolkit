@@ -14,12 +14,43 @@ pub const BOOT_MODE: u8 = 0xA5;
 /// `SetMode` byte that leaves the boot mode.
 pub const LEAVE_MODE: u8 = 0;
 
-/// Attempts on the path that polls `GetMode` until the byte is [`LEAVE_MODE`].
+/// Initial value of the register that polls `GetMode` until the byte is [`LEAVE_MODE`].
 ///
-/// That path is the one taken when the serial pointer slot is 0. The prologue
-/// stores 10 in the slot the plain instructions later test, so the other path
-/// is the one those instructions take.
+/// That path is the one taken when the serial pointer slot is 0. `ESI` starts
+/// at 10. The body runs again when `ESI` is already 0, so the maximum number
+/// of passes is [`poll_passes`] of this value. The prologue also stores 10 in
+/// the slot the other path tests, so the instructions that have a pointer take
+/// that other path.
 pub const LEAVE_POLLS: u8 = 10;
+
+/// Initial value of the boot-mode poll counter.
+///
+/// After `SetMode 0xA5`, `AutoUpdate` stores 10 at `[esp+0x20]` while three
+/// log arguments are still pushed. `add esp, 0xC` makes that same slot
+/// `[esp+0x14]`. The loop reads it there. [`poll_passes`] is how many times
+/// the body runs when the reply byte is never `0xA5`.
+pub const BOOT_POLLS: u8 = 10;
+
+/// Milliseconds passed to `Sleep` before each polled `GetMode`.
+///
+/// The call is `[0x7B2FE0B4]`, and that slot is `Sleep`. The immediate is `0x1F4`.
+pub const POLL_WAIT: u32 = 0x1F4;
+
+/// Text of the `MessageBoxA` the name refusal shows.
+pub const NAME_DIALOG: &str = "Device Firmware Wrong!";
+
+/// Caption of that dialog.
+pub const NAME_DIALOG_CAPTION: &str = "Error";
+
+/// `MessageBoxA` type argument on that refusal. The slot is `[0x7B2FE13C]`.
+pub const NAME_DIALOG_FLAGS: u32 = 0x1010;
+
+/// Passes of a poll whose counter starts at `initial` and stops after the pass
+/// where the value before the decrement was 0.
+#[must_use]
+pub const fn poll_passes(initial: u8) -> u8 {
+    initial.saturating_add(1)
+}
 
 /// Offset of the 8-byte name inside the buffer `VCX_DFU_GetInfo` fills.
 pub const DFU_NAME_OFFSET: usize = 0x20;
@@ -250,8 +281,9 @@ fn mix(z: u32, y: u32, sum: u32, key: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        BOOT_MODE, DFU_NAME_OFFSET, LEAVE_MODE, LEAVE_POLLS, RewriteError, dfu_get_info,
-        erase_chip, flash_length_fits, get_mode, in_boot, left_boot, name_blocks, rewrite_page,
+        BOOT_MODE, BOOT_POLLS, DFU_NAME_OFFSET, LEAVE_MODE, LEAVE_POLLS, NAME_DIALOG,
+        NAME_DIALOG_CAPTION, NAME_DIALOG_FLAGS, POLL_WAIT, RewriteError, dfu_get_info, erase_chip,
+        flash_length_fits, get_mode, in_boot, left_boot, name_blocks, poll_passes, rewrite_page,
         set_mode, write_flash, write_serial,
     };
     use crate::{MAX_PAYLOAD, pack};
@@ -319,6 +351,14 @@ mod tests {
         assert!(left_boot(0));
         assert!(!left_boot(0xA5));
         assert_eq!(LEAVE_POLLS, 10);
+        assert_eq!(BOOT_POLLS, 10);
+        assert_eq!(poll_passes(BOOT_POLLS), 11);
+        assert_eq!(poll_passes(LEAVE_POLLS), 11);
+        assert_eq!(poll_passes(0), 1);
+        assert_eq!(POLL_WAIT, 0x1F4);
+        assert_eq!(NAME_DIALOG, "Device Firmware Wrong!");
+        assert_eq!(NAME_DIALOG_CAPTION, "Error");
+        assert_eq!(NAME_DIALOG_FLAGS, 0x1010);
         assert_eq!(DFU_NAME_OFFSET, 0x20);
     }
 
