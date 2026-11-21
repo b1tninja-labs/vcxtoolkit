@@ -1,5 +1,5 @@
 [package]
-name = "vcxcomm"
+name = "vcxtoolkit"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
@@ -7,6 +7,9 @@ description = "VCX serial frames for a VXDIAG dongle"
 license = "Apache-2.0"
 readme = "README.md"
 publish = false
+
+[target.'cfg(windows)'.dependencies]
+vcxtoolkit-open = { path = "winport", version = "0.1.0" }
 
 [lints.rust]
 unsafe_code = "forbid"

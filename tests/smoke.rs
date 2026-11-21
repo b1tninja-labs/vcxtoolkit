@@ -2,5 +2,5 @@
 
 #[test]
 fn public_api_names_the_crate() {
-    assert_eq!(vcxcomm::name(), "vcxcomm");
+    assert_eq!(vcxtoolkit::name(), "vcxtoolkit");
 }

@@ -1,29 +1,49 @@
-# vcxcomm
+# vcxtoolkit
 
 The serial frame a VCX dongle speaks: four header bytes, a payload, a checksum, and `0xBB` markers.
 
 `vcxkit` and `vxkit` are free on PyPI and crates.io, and each sits one keystroke from a live package
-(`voxkit`, and several others for `vxkit`). This name is the one the DLL uses for the same layer
-(`VCXCommSendFrame`, `VCXCommRecvFrame`).
+(`voxkit`, and several others for `vxkit`). The DLL names this layer `VCXComm` (`VCXCommSendFrame`,
+`VCXCommRecvFrame`). This crate is `vcxtoolkit`.
 
-Status: the frame codec is implemented and checked against a live `GetInfo` answer. The serial port,
-the command set, and a vehicle read are not.
+Status: on Windows the crate opens the USB serial port and exchanges one frame. A live
+`GetInfo` on COM4 returned `VCX-NANO` and firmware `1.9.4.2`. A firmware image header can be
+compared with that version, and the license info already on the device can be read. The crate
+retrieves a license from the license service, and it downloads the firmware image the
+catalog lists for the device. That image is an update only when it is newer than the one
+running. It does not write either to the device. `plan_firmware` names the
+update steps and does not send them. The pass-through copies and the ISO 15765
+PCI names are in `docs/reads.md` and are not sent. The open row is a brake-module
+identity read. `winhive` and `iso9660` are not this project.
 
 ## What this is not
 
-It does not open the port. It does not speak SAE J2534. It does not call a license server, and it
-does not write firmware. `spskit` remains the SPS downloader.
+It does not speak SAE J2534. It retrieves a license and a firmware catalog, and it does not
+write either to the device. `spskit` remains the SPS downloader and does not open the dongle.
+The split is `docs/tool-boundary.md`.
 
 No specification for the frame was found. The rules were read from `VCX.dll` and checked on the wire.
-See `docs/sources.md`.
+See `docs/sources.md`. The update sequence the manager runs, and which this crate does
+not send, is drawn in `docs/protocol.md`.
 
 ## Use
 
 ```rust
-let wire = vcxcomm::pack([0x80, 0x00, 0x8C, 0x00], &[]).unwrap();
-let frame = vcxcomm::unpack(&wire).unwrap();
+let header = vcxtoolkit::Command::GetInfo.header(0);
+let wire = vcxtoolkit::pack(header, &[]).unwrap();
+let frame = vcxtoolkit::unpack(&wire).unwrap();
 assert!(frame.payload.is_empty());
 ```
+
+`read_header` and `file_is_newer` take a firmware image and the running version.
+`parse_license_info` takes the `0xBEC`-byte buffer already on the device.
+`license_nonce` and `license_key_half` are the eight-byte challenge and the key half:
+`5^secret` and `reply^secret` modulo `2^64 - 59`.
+`parse_catalog` reads the catalog. `firmware_for` is the image listed for a device, and
+`newer_firmware` is that image only when it is newer.
+On Windows, `exchange` writes one packed frame and returns the first reply, `fetch_license`
+retrieves the server license, `fetch_firmware` downloads the listed image, and
+`fetch_newer_firmware` downloads an image only when the catalog has a newer one.
 
 The crate is not published (`publish = false`).
 

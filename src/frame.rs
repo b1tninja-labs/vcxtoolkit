@@ -148,6 +148,206 @@ pub fn unpack(bytes: &[u8]) -> Result<Frame, FrameError> {
     Ok(Frame { header, payload })
 }
 
+/// Largest buffer `VCX_SendFrame` accepts.
+///
+/// The four header bytes count toward this limit. [`MAX_PAYLOAD`] is the same
+/// number, applied by `VCXCommSendFrame` to the payload length alone.
+pub const MAX_SEND: usize = 0x1026;
+
+/// Why `VCX_SendFrame` does not hand a buffer to the inner send.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SendCut {
+    /// The length is 0 or above [`MAX_SEND`]. The export returns `0x94`.
+    Refused,
+    /// The length is 1, 2, or 3. Subtracting 4 wraps, the inner check fails,
+    /// and the export returns `0x82`.
+    Underflow,
+}
+
+impl std::fmt::Display for SendCut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Refused => "send buffer length is 0 or above 0x1026",
+            Self::Underflow => "send buffer is shorter than its four header bytes",
+        })
+    }
+}
+
+impl std::error::Error for SendCut {}
+
+/// Header and payload `VCX_SendFrame` takes from one caller buffer.
+///
+/// The length argument is the whole buffer. The first four bytes are the
+/// header and the rest is the payload.
+///
+/// # Errors
+///
+/// Returns [`SendCut::Refused`] when `buffer` is empty or longer than
+/// [`MAX_SEND`], and [`SendCut::Underflow`] when it is shorter than 4 bytes.
+#[must_use = "a send cut that is dropped was not sent"]
+pub fn send_cut(buffer: &[u8]) -> Result<([u8; 4], &[u8]), SendCut> {
+    if buffer.is_empty() || buffer.len() > MAX_SEND {
+        return Err(SendCut::Refused);
+    }
+    if buffer.len() < 4 {
+        return Err(SendCut::Underflow);
+    }
+    Ok(([buffer[0], buffer[1], buffer[2], buffer[3]], &buffer[4..]))
+}
+
+/// One queued body after `0x7B2F4860` splits it.
+///
+/// The queued bytes are the header, the payload, and one checksum byte. The
+/// length stored in the struct is the body length minus 5. This split does
+/// not compare the checksum.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QueuedBody<'a> {
+    /// The first four queued bytes.
+    pub header: [u8; 4],
+    /// The bytes between the header and the checksum.
+    pub payload: &'a [u8],
+    /// The last queued byte.
+    pub checksum: u8,
+}
+
+/// Split a queued body the way `0x7B2F4860` does.
+///
+/// A body shorter than 5 bytes is `None`. The DLL subtracts 5 from that
+/// length with no lower check, and the subtraction wraps.
+#[must_use]
+pub fn queued_body(body: &[u8]) -> Option<QueuedBody<'_>> {
+    if body.len() < MIN_BODY {
+        return None;
+    }
+    let checksum_at = body.len() - 1;
+    Some(QueuedBody {
+        header: [body[0], body[1], body[2], body[3]],
+        payload: &body[4..checksum_at],
+        checksum: body[checksum_at],
+    })
+}
+
+/// Length `VCX_RecvFrame` stores. It is the payload length plus the four
+/// header bytes it writes in front of that payload.
+#[must_use]
+pub fn recv_length(payload_len: usize) -> Option<u32> {
+    u32::try_from(payload_len.checked_add(4)?).ok()
+}
+
+/// Bytes `0x7B2F4B60` writes around one ring chunk.
+///
+/// The chunk is copied unchanged. A `0xBB` is written before it and after it.
+/// The stored length is the chunk length plus 2. There is no checksum and no
+/// escape in this copy.
+///
+/// Returns `None` when that length does not fit in a `u32`.
+#[must_use]
+pub fn marker_wrap(chunk: &[u8]) -> Option<(Vec<u8>, u32)> {
+    let stored = u32::try_from(chunk.len().checked_add(2)?).ok()?;
+    let mut out = Vec::with_capacity(chunk.len() + 2);
+    out.push(MARKER);
+    out.extend_from_slice(chunk);
+    out.push(MARKER);
+    Some((out, stored))
+}
+
+/// Escape prefix the device uses when header byte 0 is not `0x80`.
+pub const PLUS_ESCAPE: u8 = 0xAA;
+
+/// Closing byte of that same frame. The opening byte is still `0xBB`.
+pub const PLUS_END: u8 = 0xEE;
+
+/// Where the device stores the checksum in its frame struct.
+pub const DEVICE_CHECKSUM: usize = 0x102E;
+
+/// `true` when the device's sender at `0x0801C17E` will build a frame.
+///
+/// The payload length has to be at least 1 and at most [`MAX_PAYLOAD`].
+#[must_use]
+pub fn device_will_send(payload_len: usize) -> bool {
+    (1..=MAX_PAYLOAD).contains(&payload_len)
+}
+
+fn write_plus(out: &mut Vec<u8>, byte: u8) {
+    let stuffed = match byte {
+        PLUS_ESCAPE => [PLUS_ESCAPE, 0x0A],
+        MARKER => [PLUS_ESCAPE, 0x0B],
+        PLUS_END => [PLUS_ESCAPE, 0x0E],
+        other => {
+            out.push(other);
+            return;
+        }
+    };
+    out.extend_from_slice(&stuffed);
+}
+
+/// Frame the device builds in `0x0801C17E`.
+///
+/// A payload length of 0, or one past [`MAX_PAYLOAD`], returns `None`. When
+/// header byte 0 is `0x80`, the bytes are [`pack`]. Otherwise the frame opens
+/// with `0xBB`, escapes header byte 2, the payload, and the checksum with
+/// [`PLUS_ESCAPE`], and closes with [`PLUS_END`].
+#[must_use]
+pub fn device_frame(header: [u8; 4], payload: &[u8]) -> Option<Vec<u8>> {
+    if !device_will_send(payload.len()) {
+        return None;
+    }
+    if header[0] == 0x80 {
+        return pack(header, payload).ok();
+    }
+    let sum = checksum(header, payload);
+    let mut out = Vec::with_capacity(payload.len() + 6);
+    out.push(MARKER);
+    write_plus(&mut out, header[2]);
+    for byte in payload {
+        write_plus(&mut out, *byte);
+    }
+    write_plus(&mut out, sum);
+    out.push(PLUS_END);
+    Some(out)
+}
+
+/// Most bytes `0x0801BECA` keeps after undoing [`PLUS_ESCAPE`].
+///
+/// The compare is `unstuffed < 0x1003`.
+pub const PLUS_BODY_MAX: usize = 0x1002;
+
+/// Undo the `0xAA` escape in one interior, the bytes between `0xBB` and `0xEE`.
+///
+/// A stuffed interior shorter than 2 bytes is `None`. An `0xAA` with no
+/// following byte is `None`. The device reads that next byte with no separate
+/// end check. Each escaped byte is `next | (next << 4)`, so `0x0A` is `0xAA`,
+/// `0x0B` is `0xBB`, and `0x0E` is `0xEE`. The first plain byte is header byte
+/// 2. The device also stores header byte 0 as 0. The last plain byte is the
+/// checksum. The bytes between them are the payload, and the stored length is
+/// the plain length minus 2. A plain length below 2, or above
+/// [`PLUS_BODY_MAX`], is `None`.
+#[must_use]
+pub fn plus_body(stuffed: &[u8]) -> Option<(u8, Vec<u8>, u8)> {
+    if stuffed.len() < 2 {
+        return None;
+    }
+    let mut plain = Vec::with_capacity(stuffed.len());
+    let mut index = 0;
+    while index < stuffed.len() {
+        if stuffed[index] == PLUS_ESCAPE {
+            let next = *stuffed.get(index + 1)?;
+            plain.push(next | (next << 4));
+            index += 2;
+        } else {
+            plain.push(stuffed[index]);
+            index += 1;
+        }
+    }
+    if plain.len() < 2 || plain.len() > PLUS_BODY_MAX {
+        return None;
+    }
+    let command = plain[0];
+    let checksum_byte = plain[plain.len() - 1];
+    let payload = plain[1..plain.len() - 1].to_vec();
+    Some((command, payload, checksum_byte))
+}
+
 fn write_stuffed(out: &mut Vec<u8>, bytes: &[u8]) {
     for byte in bytes {
         if *byte == MARKER || *byte == ESCAPE || *byte == ESCAPE_ALSO {
@@ -161,7 +361,11 @@ fn write_stuffed(out: &mut Vec<u8>, bytes: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ESCAPE, ESCAPE_ALSO, FrameError, MARKER, MAX_PAYLOAD, checksum, pack, unpack};
+    use super::{
+        ESCAPE, ESCAPE_ALSO, FrameError, MARKER, MAX_PAYLOAD, MAX_SEND, PLUS_BODY_MAX, PLUS_END,
+        PLUS_ESCAPE, SendCut, checksum, device_frame, device_will_send, marker_wrap, pack,
+        plus_body, queued_body, recv_length, send_cut, unpack,
+    };
 
     #[test]
     fn echo_frame_round_trips() {
@@ -231,5 +435,65 @@ mod tests {
             pack([0x80, 0x00, 0x80, 0x00], &payload),
             Err(FrameError::PayloadTooLong)
         );
+    }
+
+    #[test]
+    fn the_export_counts_the_header_in_the_length() {
+        let request = [0x80, 0x00, 0x8C, 0x00];
+        assert_eq!(send_cut(&request).unwrap(), (request, &[][..]));
+        assert_eq!(send_cut(&[]), Err(SendCut::Refused));
+        assert_eq!(send_cut(&[0x80, 0x00, 0x8C]), Err(SendCut::Underflow));
+        assert_eq!(send_cut(&vec![0_u8; MAX_SEND + 1]), Err(SendCut::Refused));
+        let mut full = vec![0_u8; MAX_SEND];
+        full[..4].copy_from_slice(&request);
+        let (header, payload) = send_cut(&full).unwrap();
+        assert_eq!(header, request);
+        assert_eq!(payload.len(), MAX_SEND - 4);
+
+        let body = [0x80, 0x00, 0x8C, 0x00, 0x11, 0x22];
+        let queued = queued_body(&body).unwrap();
+        assert_eq!(queued.header, request);
+        assert_eq!(queued.payload, &[0x11]);
+        assert_eq!(queued.checksum, 0x22);
+        assert_eq!(queued_body(&[0x80, 0x00, 0x8C, 0x00]), None);
+        assert_eq!(recv_length(0), Some(4));
+        assert_eq!(recv_length(queued.payload.len()), Some(5));
+        assert_eq!(
+            marker_wrap(b"ABC").unwrap(),
+            (vec![MARKER, b'A', b'B', b'C', MARKER], 5)
+        );
+    }
+
+    #[test]
+    fn the_device_closes_a_non_80_header_with_ee() {
+        let header = [0x80, 0x00, 0x8C, 0x00];
+        let payload = [0x11, MARKER];
+        assert_eq!(
+            device_frame(header, &payload).unwrap(),
+            pack(header, &payload).unwrap()
+        );
+        assert!(!device_will_send(0));
+        assert_eq!(device_frame(header, &[]), None);
+        assert!(!device_will_send(MAX_PAYLOAD + 1));
+        let other = [0x00, 0x00, MARKER, 0x00];
+        assert_eq!(
+            device_frame(other, &[PLUS_END, 0x01]).unwrap(),
+            vec![MARKER, 0xAA, 0x0B, 0xAA, 0x0E, 0x01, 0xAA, 0x0A, PLUS_END]
+        );
+    }
+
+    #[test]
+    fn an_aa_escape_comes_back_out_of_the_interior() {
+        let header = [0x00, 0x00, 0x11, 0x00];
+        let payload = [PLUS_ESCAPE, MARKER, PLUS_END];
+        let wire = device_frame(header, &payload).unwrap();
+        let (command, body, sum) = plus_body(&wire[1..wire.len() - 1]).unwrap();
+        assert_eq!(command, 0x11);
+        assert_eq!(body, payload);
+        assert_eq!(sum, checksum(header, &payload));
+        assert_eq!(plus_body(&[0x11, 0x11]), Some((0x11, vec![], 0x11)));
+        assert_eq!(plus_body(&[PLUS_ESCAPE]), None);
+        assert_eq!(plus_body(&[0x11]), None);
+        assert_eq!(plus_body(&vec![0x01; PLUS_BODY_MAX + 1]), None);
     }
 }
