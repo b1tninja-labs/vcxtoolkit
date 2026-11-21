@@ -320,12 +320,96 @@ pub const fn reset_ex(byte: u8) -> [u8; 1] {
     [byte]
 }
 
+/// First dword of a buffer `VCX_DEV_SynExInfo` sends as extended info.
+///
+/// The load is a little-endian dword. The four bytes are `16 16 16 16`.
+pub const EXINFO_MARK: u32 = 0x1616_1616;
+
+/// Bytes copied when that dword is present, and bytes filled on a get.
+pub const EXINFO_LEN: usize = 0x80;
+
+/// Reply length that carries an extended-info body: one status byte plus [`EXINFO_LEN`].
+pub const EXINFO_REPLY: usize = 0x81;
+
+/// Why an extended-info buffer was not built or applied.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExInfoError {
+    /// A marked buffer, or a get buffer, is shorter than [`EXINFO_LEN`].
+    /// An empty reply is also this error: the DLL returns `0x83` and does not copy.
+    Short,
+}
+
+impl std::fmt::Display for ExInfoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("extended-info buffer is shorter than the copy")
+    }
+}
+
+impl std::error::Error for ExInfoError {}
+
+/// Payload `VCX_DEV_SynExInfo` sends.
+///
+/// A buffer whose first dword is [`EXINFO_MARK`] is logged `Set ExInfo` and
+/// the payload is its first [`EXINFO_LEN`] bytes. Any other buffer is logged
+/// `Get ExInfo` and the payload is four zero bytes. The buffer itself is not
+/// copied on that path.
+///
+/// # Errors
+///
+/// Returns [`ExInfoError::Short`] when the buffer starts with the mark and is
+/// shorter than [`EXINFO_LEN`].
+#[must_use = "an extended-info payload that is dropped was not sent"]
+pub fn syn_ex_info(buffer: &[u8]) -> Result<Vec<u8>, ExInfoError> {
+    if buffer.len() >= 4
+        && u32::from_le_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) == EXINFO_MARK
+    {
+        if buffer.len() < EXINFO_LEN {
+            return Err(ExInfoError::Short);
+        }
+        return Ok(buffer[..EXINFO_LEN].to_vec());
+    }
+    Ok(vec![0, 0, 0, 0])
+}
+
+/// Apply a `SynExInfo` reply to `buffer`.
+///
+/// A buffer that already starts with [`EXINFO_MARK`] is left as it is. Any
+/// other buffer of [`EXINFO_LEN`] bytes is filled with zero. When the reply is
+/// exactly [`EXINFO_REPLY`] bytes, the `0x80` bytes after the status byte
+/// replace that fill. The status byte is the return.
+///
+/// # Errors
+///
+/// Returns [`ExInfoError::Short`] when `payload` is empty, or when a buffer
+/// that does not start with the mark is shorter than [`EXINFO_LEN`].
+#[must_use = "an extended-info status that is dropped was not applied"]
+pub fn apply_ex_info(buffer: &mut [u8], payload: &[u8]) -> Result<u8, ExInfoError> {
+    if payload.is_empty() {
+        return Err(ExInfoError::Short);
+    }
+    let status = payload[0];
+    if buffer.len() >= 4
+        && u32::from_le_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) == EXINFO_MARK
+    {
+        return Ok(status);
+    }
+    if buffer.len() < EXINFO_LEN {
+        return Err(ExInfoError::Short);
+    }
+    buffer[..EXINFO_LEN].fill(0);
+    if payload.len() == EXINFO_REPLY {
+        buffer[..EXINFO_LEN].copy_from_slice(&payload[1..EXINFO_REPLY]);
+    }
+    Ok(status)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        Command, ConfigCopy, DeviceTime, PinReading, TEST_COPY, TEST_REPLY, config_copy,
-        device_time, get_pin_vol, pin_reading, pro_send_header, reset_ex, reset_payload, set_beep,
-        set_led, set_pin_vol, test_record,
+        Command, ConfigCopy, DeviceTime, EXINFO_LEN, EXINFO_MARK, EXINFO_REPLY, ExInfoError,
+        PinReading, TEST_COPY, TEST_REPLY, apply_ex_info, config_copy, device_time, get_pin_vol,
+        pin_reading, pro_send_header, reset_ex, reset_payload, set_beep, set_led, set_pin_vol,
+        syn_ex_info, test_record,
     };
 
     fn every() -> [Command; 36] {
@@ -538,6 +622,38 @@ mod tests {
         assert_eq!(test_record(&payload[..TEST_REPLY - 1]), None);
     }
 
+    #[test]
+    fn a_marked_buffer_is_sent_and_an_unmarked_one_asks_for_it() {
+        let mut marked = vec![0_u8; EXINFO_LEN];
+        marked[..4].copy_from_slice(&EXINFO_MARK.to_le_bytes());
+        marked[4] = 0xAB;
+        assert_eq!(syn_ex_info(&marked).unwrap(), marked);
+        assert_eq!(syn_ex_info(&[0x16, 0x16, 0x16]).unwrap(), [0, 0, 0, 0]);
+        assert_eq!(syn_ex_info(&[1, 2, 3, 4, 5]).unwrap(), [0, 0, 0, 0]);
+        assert_eq!(
+            syn_ex_info(&marked[..EXINFO_LEN - 1]),
+            Err(ExInfoError::Short)
+        );
+
+        let mut kept = marked.clone();
+        assert_eq!(apply_ex_info(&mut kept, &[0x01, 0xFF]).unwrap(), 0x01);
+        assert_eq!(kept, marked);
+
+        let mut got = vec![0xEE_u8; EXINFO_LEN];
+        let mut reply = vec![0_u8; EXINFO_REPLY];
+        reply[0] = 0x01;
+        reply[1] = 0xAB;
+        assert_eq!(apply_ex_info(&mut got, &reply).unwrap(), 0x01);
+        assert_eq!(got[0], 0xAB);
+        assert_eq!(&got[1..], &reply[2..]);
+
+        let mut zeroed = vec![0xEE_u8; EXINFO_LEN];
+        assert_eq!(apply_ex_info(&mut zeroed, &[0x04]).unwrap(), 0x04);
+        assert_eq!(zeroed, vec![0; EXINFO_LEN]);
+        assert_eq!(apply_ex_info(&mut zeroed, &[]), Err(ExInfoError::Short));
+        assert_eq!(zeroed, vec![0; EXINFO_LEN]);
+    }
+
     #[cfg(windows)]
     #[test]
     #[ignore = "needs the CH343 dongle on COM4"]
@@ -559,6 +675,27 @@ mod tests {
         assert_eq!(clock.status, 0);
         assert_eq!(reading.status, 0);
         assert_eq!(reading.index, 0x10);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "needs the CH343 dongle on COM4"]
+    fn com4_reads_extended_info() {
+        let port = crate::open_usb(4, 0).expect("COM4");
+        let query = syn_ex_info(&[0]).unwrap();
+        let reply = crate::exchange(
+            &port,
+            Command::SynExInfo.header(0),
+            &query,
+            std::time::Duration::from_secs(3),
+        )
+        .expect("exinfo");
+        let mut buffer = vec![0xEE_u8; EXINFO_LEN];
+        let status = apply_ex_info(&mut buffer, &reply.payload).expect("apply");
+        assert_eq!(reply.header, [0x80, 0x00, 0x8F, 0x00]);
+        assert_eq!(reply.payload.len(), EXINFO_REPLY);
+        assert_eq!(status, 0);
+        assert_eq!(buffer, vec![0; EXINFO_LEN]);
     }
 
     #[test]

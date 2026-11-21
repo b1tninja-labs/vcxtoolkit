@@ -35,9 +35,10 @@ mod update;
 
 pub use catalog::{FirmwareItem, firmware_for, newer_firmware, parse_catalog};
 pub use command::{
-    Command, ConfigCopy, DeviceTime, PinReading, TEST_COPY, TEST_REPLY, config_copy, device_time,
-    get_pin_vol, pin_reading, pro_send_header, reset_ex, reset_payload, set_beep, set_led,
-    set_pin_vol, test_record,
+    Command, ConfigCopy, DeviceTime, EXINFO_LEN, EXINFO_MARK, EXINFO_REPLY, ExInfoError,
+    PinReading, TEST_COPY, TEST_REPLY, apply_ex_info, config_copy, device_time, get_pin_vol,
+    pin_reading, pro_send_header, reset_ex, reset_payload, set_beep, set_led, set_pin_vol,
+    syn_ex_info, test_record,
 };
 pub use dfu::{
     BOOT_MODE, BOOT_POLLS, Built, DFU_NAME_OFFSET, DFU_SERIAL_OFFSET, DfuError, LEAVE_MODE,

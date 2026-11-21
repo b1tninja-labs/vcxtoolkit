@@ -54,7 +54,17 @@ as a big-endian dword, and byte 5, when present, selects `PinVolBackups`.
 at least 5 bytes. On 2026-11-20 that dword was `0x1FAE5582`, and pin `0x10`
 stored `500` at backup index `0x10`. `SetLed` copies 4 caller bytes and `SetBeep` copies 2, in
 order. `GetTest` requires `0x107` reply bytes and copies the `0x106` bytes
-after the first. The names and bytes are the `Command` enum.
+after the first. `SynExInfo` sends the first `0x80` bytes of a buffer whose
+first dword is `0x16161616`, and logs `Set ExInfo`. Any other buffer is
+logged `Get ExInfo` and the payload is four zero bytes. A reply applied to
+that other buffer fills `0x80` bytes with zero, and when the reply is
+exactly `0x81` bytes the bytes after the status replace the fill. On
+2026-11-20 the device answered that get with status `0` and `0x80` zero
+bytes. A buffer
+that already has the mark is not overwritten. `SetExInfo` copies `0x80`
+bytes into the frame and then calls `0xB230`, which is virtualized; the
+length it returns replaces the `0x80`, so the bytes on the wire were not
+recovered. The names and bytes are the `Command` enum.
 
 ## GetInfo fields
 

@@ -279,3 +279,7 @@ protocol returns `0x0A`. Any other protocol returns 1. Both pass timeout
   The boot-mode poll starts at 10 and the indirect slots are `Sleep` and
   `MessageBoxA`, in [protocol.md](protocol.md). The crate does not enter
   boot mode and does not send `WrSerial`.
+- The bytes `SetExInfo` puts on the wire. It copies `0x80` bytes into the
+  frame, then virtualized `0xB230` replaces the length. `SynExInfo` is
+  recovered: a buffer whose first dword is `0x16161616` sends its first
+  `0x80` bytes, and any other buffer sends four zero bytes.
