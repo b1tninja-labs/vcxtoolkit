@@ -66,7 +66,10 @@ pub use forward::{
     rx_status, send_payload, set_com_param, set_filter_payload, set_timer_payload, start_filter,
     start_payload, stop_filter, stop_payload, stop_timer, uart_sum,
 };
-pub use frame::{Frame, FrameError, MAX_PAYLOAD, checksum, pack, unpack};
+pub use frame::{
+    Frame, FrameError, MAX_PAYLOAD, MAX_SEND, QueuedBody, SendCut, checksum, pack, queued_body,
+    recv_length, send_cut, unpack,
+};
 pub use image::{
     ImageError, ImageHeader, PageRecord, file_is_newer, read_header, read_pages, version_is_newer,
 };

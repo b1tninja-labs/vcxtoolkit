@@ -64,6 +64,18 @@ flowchart LR
 The escape reads the four header bytes, then the payload, then the checksum, and wraps
 that stream in `0xBB`. A live `GetInfo` answer on 2026-11-20 matched this sum.
 
+`VCX_SendFrame` (`0x7B2F54C0`) takes one caller buffer. Its length counts the
+four header bytes and the payload, and a length above `0x1026` returns `0x94`.
+A length of 0 returns `0x94`. A length of 1, 2, or 3 subtracts 4, the inner
+check fails, and the export returns `0x82`. `VCX_RecvFrame` (`0x7B2F55E0`)
+writes the header and the payload back, and stores that combined length.
+`0x7B2F4860` splits a queued body into the header, the payload, and the last
+byte. The stored payload length is the body length minus 5. The checksum byte
+is kept and is not compared. An empty ring returns 0. `VCX_RecvFrame` tries
+the ring at `device+0x24` and then the ring at `device+0x28`. A miss sleeps 1
+millisecond. The deadline read after that sleep is virtualized. A missed
+deadline returns `0x83`.
+
 ## License update, as the manager orders it
 
 `DeviceInfoWnd::UpdateDeviceLicense` (`0x0042BA50`) opens with `VCX_Open` when byte

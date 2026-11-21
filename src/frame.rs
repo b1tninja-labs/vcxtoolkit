@@ -148,6 +148,92 @@ pub fn unpack(bytes: &[u8]) -> Result<Frame, FrameError> {
     Ok(Frame { header, payload })
 }
 
+/// Largest buffer `VCX_SendFrame` accepts.
+///
+/// The four header bytes count toward this limit. [`MAX_PAYLOAD`] is the same
+/// number, applied by `VCXCommSendFrame` to the payload length alone.
+pub const MAX_SEND: usize = 0x1026;
+
+/// Why `VCX_SendFrame` does not hand a buffer to the inner send.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SendCut {
+    /// The length is 0 or above [`MAX_SEND`]. The export returns `0x94`.
+    Refused,
+    /// The length is 1, 2, or 3. Subtracting 4 wraps, the inner check fails,
+    /// and the export returns `0x82`.
+    Underflow,
+}
+
+impl std::fmt::Display for SendCut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Refused => "send buffer length is 0 or above 0x1026",
+            Self::Underflow => "send buffer is shorter than its four header bytes",
+        })
+    }
+}
+
+impl std::error::Error for SendCut {}
+
+/// Header and payload `VCX_SendFrame` takes from one caller buffer.
+///
+/// The length argument is the whole buffer. The first four bytes are the
+/// header and the rest is the payload.
+///
+/// # Errors
+///
+/// Returns [`SendCut::Refused`] when `buffer` is empty or longer than
+/// [`MAX_SEND`], and [`SendCut::Underflow`] when it is shorter than 4 bytes.
+#[must_use = "a send cut that is dropped was not sent"]
+pub fn send_cut(buffer: &[u8]) -> Result<([u8; 4], &[u8]), SendCut> {
+    if buffer.is_empty() || buffer.len() > MAX_SEND {
+        return Err(SendCut::Refused);
+    }
+    if buffer.len() < 4 {
+        return Err(SendCut::Underflow);
+    }
+    Ok(([buffer[0], buffer[1], buffer[2], buffer[3]], &buffer[4..]))
+}
+
+/// One queued body after `0x7B2F4860` splits it.
+///
+/// The queued bytes are the header, the payload, and one checksum byte. The
+/// length stored in the struct is the body length minus 5. This split does
+/// not compare the checksum.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QueuedBody<'a> {
+    /// The first four queued bytes.
+    pub header: [u8; 4],
+    /// The bytes between the header and the checksum.
+    pub payload: &'a [u8],
+    /// The last queued byte.
+    pub checksum: u8,
+}
+
+/// Split a queued body the way `0x7B2F4860` does.
+///
+/// A body shorter than 5 bytes is `None`. The DLL subtracts 5 from that
+/// length with no lower check, and the subtraction wraps.
+#[must_use]
+pub fn queued_body(body: &[u8]) -> Option<QueuedBody<'_>> {
+    if body.len() < MIN_BODY {
+        return None;
+    }
+    let checksum_at = body.len() - 1;
+    Some(QueuedBody {
+        header: [body[0], body[1], body[2], body[3]],
+        payload: &body[4..checksum_at],
+        checksum: body[checksum_at],
+    })
+}
+
+/// Length `VCX_RecvFrame` stores. It is the payload length plus the four
+/// header bytes it writes in front of that payload.
+#[must_use]
+pub fn recv_length(payload_len: usize) -> Option<u32> {
+    u32::try_from(payload_len.checked_add(4)?).ok()
+}
+
 fn write_stuffed(out: &mut Vec<u8>, bytes: &[u8]) {
     for byte in bytes {
         if *byte == MARKER || *byte == ESCAPE || *byte == ESCAPE_ALSO {
@@ -161,7 +247,10 @@ fn write_stuffed(out: &mut Vec<u8>, bytes: &[u8]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ESCAPE, ESCAPE_ALSO, FrameError, MARKER, MAX_PAYLOAD, checksum, pack, unpack};
+    use super::{
+        ESCAPE, ESCAPE_ALSO, FrameError, MARKER, MAX_PAYLOAD, MAX_SEND, SendCut, checksum, pack,
+        queued_body, recv_length, send_cut, unpack,
+    };
 
     #[test]
     fn echo_frame_round_trips() {
@@ -231,5 +320,28 @@ mod tests {
             pack([0x80, 0x00, 0x80, 0x00], &payload),
             Err(FrameError::PayloadTooLong)
         );
+    }
+
+    #[test]
+    fn the_export_counts_the_header_in_the_length() {
+        let request = [0x80, 0x00, 0x8C, 0x00];
+        assert_eq!(send_cut(&request).unwrap(), (request, &[][..]));
+        assert_eq!(send_cut(&[]), Err(SendCut::Refused));
+        assert_eq!(send_cut(&[0x80, 0x00, 0x8C]), Err(SendCut::Underflow));
+        assert_eq!(send_cut(&vec![0_u8; MAX_SEND + 1]), Err(SendCut::Refused));
+        let mut full = vec![0_u8; MAX_SEND];
+        full[..4].copy_from_slice(&request);
+        let (header, payload) = send_cut(&full).unwrap();
+        assert_eq!(header, request);
+        assert_eq!(payload.len(), MAX_SEND - 4);
+
+        let body = [0x80, 0x00, 0x8C, 0x00, 0x11, 0x22];
+        let queued = queued_body(&body).unwrap();
+        assert_eq!(queued.header, request);
+        assert_eq!(queued.payload, &[0x11]);
+        assert_eq!(queued.checksum, 0x22);
+        assert_eq!(queued_body(&[0x80, 0x00, 0x8C, 0x00]), None);
+        assert_eq!(recv_length(0), Some(4));
+        assert_eq!(recv_length(queued.payload.len()), Some(5));
     }
 }
