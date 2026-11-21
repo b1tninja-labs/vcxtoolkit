@@ -312,6 +312,38 @@ flowchart TD
   kind3["kind 3 filter flow copy"] --> opaque["same length as the pattern"]
 ```
 
+A first frame carries its length in twelve bits: the low nibble of byte 1,
+then byte 2. ISO 15765-2:2016 §9.6.3.1. Both of those fields being 0 is the
+escape, and the length is then bytes 3 through 6, most significant byte first.
+§9.6.3.2 ignores an escaped length of 4 095 or less, a length below the
+minimum for the addressing scheme, and a first frame whose CAN data length is
+under 8. `first_length` keeps the encoded value. The copy has no transmit
+length and no CAN data length, so those checks are not applied.
+
+A consecutive frame carries its sequence number in the low nibble.
+§9.6.4.3 Table 17. The number runs from 0 through 15. The first frame has no
+sequence field and is treated as segment 0. The first consecutive frame is 1.
+After 15 the next is 0, and a flow-control frame does not change the number.
+`sequence_number` returns the nibble.
+
+ISO 14229-1:2013 §7.3.1 gives `A_PCI` two shapes. A request, and a response
+whose first byte is not `0x7F`, is that one service id. A negative response
+is `0x7F` and then the service id. §7.3.2 puts a request on bit 6 clear and a
+positive response on bit 6 set, except a periodic data response of service
+`0x2A`. `response_bit` reports the bit and does not detect that service.
+`service_pci` names an `A_Data` slice. In a classical single frame that slice
+begins at byte 1.
+
+```mermaid
+flowchart LR
+  ff["first frame"] --> twelve["nibble and byte 2"]
+  ff --> escape["both zero"]
+  escape --> wide["bytes 3 to 6"]
+  cf["consecutive frame"] --> sn["low nibble, 0 through 15"]
+  data["A_Data"] --> one["one service id"]
+  data --> two["0x7F, then the service id"]
+```
+
 `periodic_timer` is the `AddTimer` record. The first copied tail is the
 byte-swapped flag dword and then the same data `copied_data` would place at
 PDU offset 6. The interval is stored times `0x3E8`. Stopping a timer sends a

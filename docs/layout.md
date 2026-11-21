@@ -14,7 +14,7 @@
   offset `0x14` of a `GetInfo` reply, and rewrites a page in memory.
   `update` describes the firmware-update steps and refuses the ones that would be sent.
   `forward` builds the `VCX_PRO_Open` dword and the `VCX_PRO_Send` payload the pass-through copies.
-  `pci` names the first ISO 15765 PCI byte, the service id that follows a classical single frame, and the three flow-control bytes. The pass-through does not build them.
+  `pci` names the ISO 15765 PCI fields and the service id at the start of the application data. The pass-through does not build them.
 - `winport/` is the package `vcxtoolkit-open`. It is the Win32 boundary: this crate forbids `unsafe`,
   and `CreateFile`, `SetCommState`, `SetCommTimeouts`, `SetCommMask`, `SetupComm`, and `WinHTTP` are FFI.
   It is not a second product and it is not published.

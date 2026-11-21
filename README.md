@@ -12,8 +12,9 @@ compared with that version, and the license info already on the device can be re
 retrieves a license from the license service, and it downloads the firmware image the
 catalog lists for the device. That image is an update only when it is newer than the one
 running. It does not write either to the device. `plan_firmware` names the
-update steps and does not send them. A vehicle read is planned in `docs/reads.md`
-and is not started.
+update steps and does not send them. The pass-through copies and the ISO 15765
+PCI names are in `docs/reads.md` and are not sent. The open row is a brake-module
+identity read. `winhive` and `iso9660` are not this project.
 
 ## What this is not
 

@@ -1,5 +1,5 @@
-//! The first PCI byte from ISO 15765-2:2016 Table 8, and the service id that
-//! follows a classical single frame.
+//! PCI fields from ISO 15765-2:2016, and the service id that follows a
+//! classical single frame.
 //!
 //! The pass-through copies the caller's bytes unchanged. This module names
 //! those bytes when the caller already formed them. It does not wrap a
@@ -125,8 +125,103 @@ fn separation(byte: u8) -> Separation {
     }
 }
 
+/// Encoded first-frame length. ISO 15765-2:2016 §9.6.3.1.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FirstLength {
+    /// Low nibble of byte 1, then byte 2. Twelve bits.
+    Twelve(u16),
+    /// Bytes 3 through 6, most significant byte first.
+    ///
+    /// The low nibble and byte 2 were both 0. §9.6.3.2 says an escaped length
+    /// of 4 095 or less is ignored. The encoded value is kept here.
+    Escaped(u32),
+}
+
+/// First-frame length, when `frame` starts at the PCI byte.
+///
+/// A low nibble of 0 is a twelve-bit length when byte 2 is not 0. §9.6.3.2
+/// ignores a first frame shorter than the minimum for the addressing scheme,
+/// and a first frame whose CAN data length is under 8. The copy has neither
+/// the transmit length nor the CAN data length, so those checks are not applied.
+#[must_use]
+pub fn first_length(frame: &[u8]) -> Option<FirstLength> {
+    let first = *frame.first()?;
+    if !matches!(pci_type(first), PciType::First) {
+        return None;
+    }
+    let nibble = first & 0x0F;
+    let second = *frame.get(1)?;
+    if nibble == 0 && second == 0 {
+        if frame.len() < 6 {
+            return None;
+        }
+        let length = u32::from_be_bytes([frame[2], frame[3], frame[4], frame[5]]);
+        return Some(FirstLength::Escaped(length));
+    }
+    Some(FirstLength::Twelve(
+        (u16::from(nibble) << 8) | u16::from(second),
+    ))
+}
+
+/// Sequence number in the low nibble of a consecutive-frame PCI byte.
+///
+/// ISO 15765-2:2016 §9.6.4.3 Table 17. The first frame has no sequence field
+/// and is treated as segment 0. The first consecutive frame is 1. After 15
+/// the next is 0. A flow-control frame does not change the number. This
+/// returns the nibble and does not step it.
+#[must_use]
+pub fn sequence_number(first: u8) -> Option<u8> {
+    match pci_type(first) {
+        PciType::Consecutive => Some(first & 0x0F),
+        _ => None,
+    }
+}
+
 /// `NR_SI`. ISO 14229-1:2013 §7.3.3. It is not a service id.
 pub const NEGATIVE_RESPONSE: u8 = 0x7F;
+
+/// `A_PCI` at the start of `A_Data`. ISO 14229-1:2013 §7.3.1.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServicePci {
+    /// The first byte is the service id.
+    Service(u8),
+    /// The first byte is [`NEGATIVE_RESPONSE`]. The second is the service id.
+    Negative {
+        /// Service id of the response.
+        service: u8,
+    },
+}
+
+/// `A_PCI` of an `A_Data` slice.
+///
+/// A request or a response whose first byte is not [`NEGATIVE_RESPONSE`] is
+/// that one byte. A negative response is two bytes. §7.3.1 says a periodic
+/// data response of service `0x2A` has no `A_PCI`. This does not detect that
+/// service. In a classical single frame, `A_Data` begins at byte 1.
+#[must_use]
+pub fn service_pci(data: &[u8]) -> Option<ServicePci> {
+    let first = *data.first()?;
+    if first == NEGATIVE_RESPONSE {
+        return Some(ServicePci::Negative {
+            service: *data.get(1)?,
+        });
+    }
+    Some(ServicePci::Service(first))
+}
+
+/// Bit 6 of a service id. ISO 14229-1:2013 §7.3.2.
+///
+/// [`None`] is [`NEGATIVE_RESPONSE`], which is not a service id. `Some(false)`
+/// is a request. `Some(true)` is a positive response. Periodic data responses
+/// of service `0x2A` are the exception named in that clause, and this bit
+/// does not detect them.
+#[must_use]
+pub fn response_bit(service: u8) -> Option<bool> {
+    if service == NEGATIVE_RESPONSE {
+        return None;
+    }
+    Some(service & 0x40 != 0)
+}
 
 /// Service id at byte 1 of a classical single frame.
 ///
@@ -153,7 +248,8 @@ pub fn single_service(frame: &[u8]) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        FlowControl, FlowStatus, NEGATIVE_RESPONSE, PciType, Separation, flow_control, pci_type,
+        FirstLength, FlowControl, FlowStatus, NEGATIVE_RESPONSE, PciType, Separation, ServicePci,
+        first_length, flow_control, pci_type, response_bit, sequence_number, service_pci,
         single_service,
     };
 
@@ -214,5 +310,36 @@ mod tests {
         );
         assert_eq!(flow_control(&[0x10, 0x00, 0x00]), None);
         assert_eq!(flow_control(&[0x30, 0x00]), None);
+    }
+
+    #[test]
+    fn a_first_frame_length_is_twelve_bits_or_four_bytes() {
+        assert_eq!(
+            first_length(&[0x10, 0x00, 0x00, 0x00, 0x10, 0x00]),
+            Some(FirstLength::Escaped(0x1000))
+        );
+        assert_eq!(
+            first_length(&[0x10, 0x14]),
+            Some(FirstLength::Twelve(0x014))
+        );
+        assert_eq!(
+            first_length(&[0x10, 0x08]),
+            Some(FirstLength::Twelve(0x008))
+        );
+        assert_eq!(first_length(&[0x10, 0x00]), None);
+        assert_eq!(first_length(&[0x20, 0x10]), None);
+        assert_eq!(sequence_number(0x21), Some(1));
+        assert_eq!(sequence_number(0x20), Some(0));
+        assert_eq!(sequence_number(0x2F), Some(15));
+        assert_eq!(sequence_number(0x10), None);
+        assert_eq!(service_pci(&[0x10]), Some(ServicePci::Service(0x10)));
+        assert_eq!(
+            service_pci(&[NEGATIVE_RESPONSE, 0x10]),
+            Some(ServicePci::Negative { service: 0x10 })
+        );
+        assert_eq!(service_pci(&[NEGATIVE_RESPONSE]), None);
+        assert_eq!(response_bit(0x10), Some(false));
+        assert_eq!(response_bit(0x50), Some(true));
+        assert_eq!(response_bit(NEGATIVE_RESPONSE), None);
     }
 }
