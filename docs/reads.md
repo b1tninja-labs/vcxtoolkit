@@ -344,6 +344,43 @@ is clear. A UART drop that leaves 0 is not queued. ISO 15765 keeps its bytes.
 PDU bit 0 rewrites protocols `6` and `0x10000` to `5`. The bytes at offset 6
 are still whatever `VCX_PRO_Recv` wrote.
 
+### The firmware side: the dongle pushes a reply, it is not polled
+
+The host export `VCX_PRO_Recv` is virtualized, so what it emits on the wire was
+read from the other end — the dongle firmware `vcxa-1.9.4.2-plain.bin` (ARM
+Cortex, base `0x08010000`), which is not virtualized and carries its own debug
+strings.
+
+- **There is no receive command.** The firmware's command handlers each log a
+  `VCX2_Cmd…` name; the full set (27, `0x0803C4A4`–`0x0803D4C8`) is channel setup
+  (`CreateCH`, `SelectCH`, `SetCANBaud`/`TxID`/`RxID`/`Filter`/`Pin`/`Pro`,
+  `AddFilter`, `SetBaud`, `SetTime`, `SetBUS`, `SetWave`, `SetKBUS1`/`2`), data
+  send (`DataWave`, `DataFast`, `DataSlow`), control (`Start`, `StartMon`,
+  `Reset`, `CommEcho`), and device reads (`GetSerialNO`, `GetVersion`,
+  `GetPinVolt`). None is a `Recv`/`Read`. So the `0x44` header a caller might guess
+  for a receive command is **not a command the firmware has** — do not ship it.
+- **The dongle streams received frames.** After `Start`/`StartMon` the firmware
+  monitors the bus and queues each received frame (`gVCXComm.pRxQueue`,
+  `pro->rx_queue`, the `rx callback data = %02x` log). `ProcessQueuedCan`
+  (`0x080188B0`) turns one queued record into the reply PDU the host reads — a flag
+  dword, a `u16` length, and the shuffled id/data — exactly the shape
+  `VCXPT32!ConvertVCXMsg` parses. That PDU envelope is recovered (see
+  [The open row](#the-open-row)); `collect::read_identity_reply` applies it.
+- **So after a `Send` the ECU answer is a separate pushed frame, not the ack.** The
+  one-byte reply to `Send`/`Start` (observed `0x9B` on real hardware) is the
+  command ack, not the vehicle reply. The reply arrives later as its own serial
+  frame, read from the port with the existing `frame` reader, and its PDU payload
+  is what `read_identity_reply` consumes.
+
+What is still not byte-confirmed from the binaries: the *serial frame wrapper*
+around a pushed receive frame (its header/command byte, if any), and whether the
+host writes any poll byte before reading. The host export that would show this is
+virtualized. The owner can settle it with one capture: with the dongle on `COM4`,
+run the native-DLL read (`vcx_j2534_capture.py`) through one identity read and log
+the raw `COM4` traffic; the bytes the host writes after the `Send` ack, and the
+exact frame the dongle returns, are the wrapper. That is a bench measurement, not
+a frame this note invents, and no such capture was performed here.
+
 ## The copy and the two standards
 
 ISO 15765-2:2016 §9.6.1 Table 8 puts the N_PCI type in bits 7–4 of the first
