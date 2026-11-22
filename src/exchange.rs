@@ -163,6 +163,29 @@ pub fn exchange_with<S: SerialPort, P: Patience>(
     read_frame(port, patience)
 }
 
+/// Read one reply frame from `port` without writing anything first, pacing empty
+/// reads with `patience`.
+///
+/// This is the read half of [`exchange_with`] on its own: the VCX dongle *pushes*
+/// an ECU reply as its own serial frame after a `VCX_PRO_Send`, rather than
+/// answering a poll (the firmware has no receive command; the recovered command
+/// set is channel setup, `Start`/`StartMon`, and the info reads — none is a
+/// `Recv`). So the reply is read, not requested. The first `0xBB`…`0xBB` slice
+/// that [`crate::unpack`] accepts is returned; later bytes are left buffered in the
+/// OS. It writes no bytes and transmits nothing of its own.
+///
+/// # Errors
+///
+/// Returns [`ExchangeError::Read`] when a read fails and [`ExchangeError::Timeout`]
+/// when `patience` gives up before a complete frame is buffered.
+#[must_use = "a reply that is dropped was not read"]
+pub fn read_message<S: SerialPort, P: Patience>(
+    port: &S,
+    patience: &mut P,
+) -> Result<crate::Frame, ExchangeError<S::Error>> {
+    read_frame(port, patience)
+}
+
 /// Why [`exchange`] did not return a frame.
 #[derive(Debug)]
 pub enum ExchangeError<E> {
@@ -277,6 +300,74 @@ mod tests {
         let frame = super::first_frame(&buf).expect("first frame");
         assert_eq!(frame.header, [0x80, 0x00, 0x8C, 0x00]);
         assert_eq!(frame.payload, [] as [u8; 0]);
+    }
+
+    // A port that writes nothing (recording any attempt) and serves queued reads.
+    struct ReadOnlyFake {
+        wrote: std::cell::Cell<bool>,
+        reads: std::cell::RefCell<std::collections::VecDeque<Vec<u8>>>,
+    }
+
+    impl super::SerialPort for ReadOnlyFake {
+        type Error = std::io::Error;
+
+        fn write(&self, buf: &[u8]) -> Result<usize, std::io::Error> {
+            self.wrote.set(true);
+            Ok(buf.len())
+        }
+
+        fn read(&self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
+            let mut reads = self.reads.borrow_mut();
+            match reads.front_mut() {
+                None => Ok(0),
+                Some(chunk) => {
+                    let n = buf.len().min(chunk.len());
+                    buf[..n].copy_from_slice(&chunk[..n]);
+                    if n == chunk.len() {
+                        reads.pop_front();
+                    } else {
+                        chunk.drain(..n);
+                    }
+                    Ok(n)
+                }
+            }
+        }
+    }
+
+    struct Tries(u32);
+
+    impl super::Patience for Tries {
+        fn keep_waiting(&mut self) -> bool {
+            if self.0 == 0 {
+                return false;
+            }
+            self.0 -= 1;
+            true
+        }
+    }
+
+    #[test]
+    fn read_message_returns_a_pushed_frame_without_writing() {
+        // The dongle pushes a reply frame; read_message reads it with no write.
+        let pushed = crate::pack([0x80, 0x00, 0x00, 0x11], b"HI").unwrap();
+        let fake = ReadOnlyFake {
+            wrote: std::cell::Cell::new(false),
+            reads: std::cell::RefCell::new([pushed].into_iter().collect()),
+        };
+        let frame = super::read_message(&fake, &mut Tries(0)).expect("pushed frame");
+        assert_eq!(frame.header, [0x80, 0x00, 0x00, 0x11]);
+        assert_eq!(frame.payload, b"HI");
+        assert!(!fake.wrote.get(), "read_message must not transmit");
+    }
+
+    #[test]
+    fn read_message_times_out_on_a_silent_port() {
+        let fake = ReadOnlyFake {
+            wrote: std::cell::Cell::new(false),
+            reads: std::cell::RefCell::new(std::collections::VecDeque::new()),
+        };
+        let error = super::read_message(&fake, &mut Tries(0)).unwrap_err();
+        assert!(matches!(error, super::ExchangeError::Timeout));
     }
 
     #[test]
