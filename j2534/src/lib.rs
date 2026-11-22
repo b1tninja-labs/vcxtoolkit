@@ -13,21 +13,27 @@
 //! `#[allow(unsafe_code)]`, with the crate lint set to `deny`; the library stays
 //! `forbid`. See `docs/j2534.md` for the full design.
 //!
-//! **Status: scaffold.** The exports' signatures, the `PASSTHRU_MSG` layout, the
-//! raw-mode CAN-id convention, the J2534→VCX mapping, and the
-//! `PassThruSupport.04.04` registry record are all here and tested. The
-//! channel-bearing calls return `ERR_NOT_SUPPORTED` (pending): the native VCX
-//! vehicle exchange is unproven on hardware (a bench `TesterPresent` returns a
-//! dongle status, no vehicle), and this host does not claim a link it cannot
-//! prove. Nothing here transmits to a vehicle, and nothing writes the registry;
-//! `registry` builds the install plan and holds it, the way `vcxtoolkit::collect`
-//! holds a vehicle read.
+//! **Status: native driver.** On Windows the exports open the dongle (the
+//! `runtime` session state) and drive the recovered, hardware-accepted sequence
+//! over [`native`]: `PassThruConnect` runs `VCX_PRO_Open(0x8001)` → `SetComParam` →
+//! `SetFilter` → `Start`, `PassThruStartMsgFilter` installs the flow-control
+//! filter, `PassThruWriteMsgs` sends through `VCX_PRO_Send`, and `PassThruReadMsgs`
+//! reads the reply frame's recovered envelope. The driver is unit-tested over the
+//! serial seam; the live COM4 bring-up is an `#[ignore]`d owner-run test that
+//! sends no vehicle request. The one unconfirmed point is the read *trigger*
+//! (async push vs. a `VCX_PRO_Recv` request whose bytes are unrecovered): the
+//! driver reads a queued frame and ships no guessed request. This host synthesizes
+//! no vehicle content (the app owns `Data`), never writes the registry
+//! (`registry` builds the plan and holds it), and never flips
+//! `vcxtoolkit::collect::READ_LAYOUT_RECOVERED`.
 
 pub mod engine;
 pub mod ffi;
 pub mod msg;
+pub mod native;
 pub mod rawmode;
 pub mod registry;
+pub(crate) mod runtime;
 pub mod status;
 
 /// The name of this crate, as Cargo knows it.

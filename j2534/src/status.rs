@@ -26,6 +26,8 @@ pub const ERR_DEVICE_NOT_CONNECTED: Status = 0x08;
 pub const ERR_TIMEOUT: Status = 0x09;
 /// A message was malformed. `ERR_INVALID_MSG`.
 pub const ERR_INVALID_MSG: Status = 0x0A;
+/// A read found no queued message. `ERR_BUFFER_EMPTY`.
+pub const ERR_BUFFER_EMPTY: Status = 0x10;
 /// The device id is not one this DLL handed out. `ERR_INVALID_DEVICE_ID`.
 pub const ERR_INVALID_DEVICE_ID: Status = 0x1A;
 

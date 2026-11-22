@@ -26,6 +26,9 @@ use crate::status::{ERR_INVALID_CHANNEL_ID, ERR_NULL_PARAMETER, STATUS_NOERROR, 
 /// track a table; the scaffold opens at most the one VCX on the port.
 const DEVICE_ID: u32 = 1;
 
+/// The single channel id this driver hands out (one ISO 15765 channel).
+const CHANNEL_ID: u32 = 1;
+
 /// The J2534-1 version/error string buffer length (documented as 80 bytes).
 const STRING_CAP: usize = 80;
 
@@ -57,23 +60,57 @@ unsafe fn write_cstr(buf: *mut c_char, text: &str, cap: usize) {
     }
 }
 
-/// `PassThruOpen` — open the pass-through device and hand back a device id.
-///
-/// Opening the DLL needs no vehicle, so this succeeds and reports `DEVICE_ID`.
+/// Copy a `PASSTHRU_MSG`'s live `Data[..DataSize]` into an owned vector.
 ///
 /// # Safety
 ///
-/// `pDeviceID` must be null or point to a writable `u32`. `pName` is ignored.
+/// `p` must point to a valid, readable `PassThruMsg`.
+unsafe fn msg_data(p: *const crate::msg::PassThruMsg) -> Vec<u8> {
+    let msg = unsafe { &*p };
+    let size = usize::try_from(msg.DataSize)
+        .unwrap_or(0)
+        .min(crate::msg::DATA_MAX);
+    msg.Data[..size].to_vec()
+}
+
+/// Fill a `PASSTHRU_MSG` the app provided with one ISO 15765 reply's bytes.
+///
+/// # Safety
+///
+/// `p` must point to a valid, writable `PassThruMsg`.
+unsafe fn fill_msg(p: *mut crate::msg::PassThruMsg, app: &[u8]) {
+    let msg = unsafe { &mut *p };
+    msg.ProtocolID = 6;
+    msg.RxStatus = 0;
+    msg.TxFlags = 0;
+    msg.Timestamp = 0;
+    msg.ExtraDataIndex = 0;
+    let n = app.len().min(crate::msg::DATA_MAX);
+    msg.DataSize = u32::try_from(n).unwrap_or(0);
+    msg.Data[..n].copy_from_slice(&app[..n]);
+}
+
+/// `PassThruOpen` — open the VCX-NANO on its serial port and hand back a device id.
+///
+/// Opens the dongle (`runtime::open`, default COM4). `pName` is not parsed; the
+/// VCX-NANO's port is used as configured. On success the device id is `DEVICE_ID`.
+///
+/// # Safety
+///
+/// `pDeviceID` must be null or point to a writable `u32`.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn PassThruOpen(_pName: *const c_void, pDeviceID: *mut u32) -> Status {
     if pDeviceID.is_null() {
         return ERR_NULL_PARAMETER;
     }
-    unsafe { write_u32(pDeviceID, DEVICE_ID) };
-    STATUS_NOERROR
+    let status = crate::runtime::open(crate::runtime::DEFAULT_PORT);
+    if status == STATUS_NOERROR {
+        unsafe { write_u32(pDeviceID, DEVICE_ID) };
+    }
+    status
 }
 
-/// `PassThruClose` — close a device opened by [`PassThruOpen`].
+/// `PassThruClose` — close the device opened by [`PassThruOpen`].
 ///
 /// # Safety
 ///
@@ -83,15 +120,16 @@ pub unsafe extern "system" fn PassThruClose(DeviceID: u32) -> Status {
     if DeviceID != DEVICE_ID {
         return crate::status::ERR_INVALID_DEVICE_ID;
     }
-    STATUS_NOERROR
+    crate::runtime::close()
 }
 
-/// `PassThruConnect` — open a protocol channel.
+/// `PassThruConnect` — open an ISO 15765 channel and run the recovered bring-up.
 ///
-/// Validates the protocol against the recovered `VCX_PRO_Open` table
-/// ([`engine::connect_open_code`]), then returns the pending-hardware status: the
-/// channel bring-up (`SetComParam`/`SetFilter`/`Start` + flow-control filter) is
-/// recovered but unproven on a vehicle, so the scaffold opens no live channel.
+/// Runs the hardware-accepted GM sequence `VCX_PRO_Open(0x8001)` →
+/// `SetComParam{key 3, baud}` → `SetFilter(1)` → `Start` (`runtime::connect`). Only
+/// ISO 15765 (protocol 6) is wired natively; other protocols return
+/// `ERR_NOT_SUPPORTED`. The app still installs a flow-control filter
+/// ([`PassThruStartMsgFilter`]) before a reply is delivered.
 ///
 /// # Safety
 ///
@@ -101,7 +139,7 @@ pub unsafe extern "system" fn PassThruConnect(
     DeviceID: u32,
     ProtocolID: u32,
     _Flags: u32,
-    _BaudRate: u32,
+    BaudRate: u32,
     pChannelID: *mut u32,
 ) -> Status {
     if pChannelID.is_null() {
@@ -110,32 +148,41 @@ pub unsafe extern "system" fn PassThruConnect(
     if DeviceID != DEVICE_ID {
         return crate::status::ERR_INVALID_DEVICE_ID;
     }
-    match engine::connect_open_code(ProtocolID) {
-        Ok(_dword) => engine::pending_hardware(),
-        Err(status) => status,
+    let status = crate::runtime::connect(ProtocolID, BaudRate);
+    if status == STATUS_NOERROR {
+        unsafe { write_u32(pChannelID, CHANNEL_ID) };
     }
+    status
 }
 
 /// `PassThruDisconnect` — close a channel.
 ///
-/// No channel is handed out by the scaffold, so any id is unknown.
+/// The channel's dongle teardown is left to [`PassThruClose`]; this only validates
+/// the channel id.
 ///
 /// # Safety
 ///
 /// Safe to call; `ChannelID` is a value.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn PassThruDisconnect(_ChannelID: u32) -> Status {
-    ERR_INVALID_CHANNEL_ID
+pub unsafe extern "system" fn PassThruDisconnect(ChannelID: u32) -> Status {
+    if ChannelID != CHANNEL_ID {
+        return ERR_INVALID_CHANNEL_ID;
+    }
+    STATUS_NOERROR
 }
 
-/// `PassThruReadMsgs` — read queued messages.
+/// `PassThruReadMsgs` — read one queued ISO 15765 reply.
+///
+/// Reads the next reply frame the dongle pushed and parses the recovered Recv
+/// envelope (`runtime::read`), filling one `PASSTHRU_MSG` whose `Data` is the
+/// reply's `[4-byte rx CAN id][application PDU]`. Reads at most one message.
 ///
 /// # Safety
 ///
 /// `pMsg` and `pNumMsgs` must be null or valid for the counts they carry.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn PassThruReadMsgs(
-    _ChannelID: u32,
+    ChannelID: u32,
     pMsg: *mut crate::msg::PassThruMsg,
     pNumMsgs: *mut u32,
     _Timeout: u32,
@@ -143,20 +190,37 @@ pub unsafe extern "system" fn PassThruReadMsgs(
     if pMsg.is_null() || pNumMsgs.is_null() {
         return ERR_NULL_PARAMETER;
     }
-    // No live channel, so nothing is queued: report zero messages read, then the
-    // pending-hardware status (the Recv parse is engine::read_application_bytes).
-    unsafe { write_u32(pNumMsgs, 0) };
-    engine::pending_hardware()
+    if ChannelID != CHANNEL_ID {
+        unsafe { write_u32(pNumMsgs, 0) };
+        return ERR_INVALID_CHANNEL_ID;
+    }
+    match crate::runtime::read() {
+        Ok(app) => {
+            unsafe {
+                fill_msg(pMsg, &app);
+                write_u32(pNumMsgs, 1);
+            }
+            STATUS_NOERROR
+        }
+        Err(status) => {
+            unsafe { write_u32(pNumMsgs, 0) };
+            status
+        }
+    }
 }
 
-/// `PassThruWriteMsgs` — write messages to the vehicle.
+/// `PassThruWriteMsgs` — write one ISO 15765 message to the vehicle.
+///
+/// Forwards the app's `PASSTHRU_MSG.Data` (`[4-byte CAN id][PDU]`) through
+/// `VCX_PRO_Send` (`runtime::write`). The content is the app's; this DLL
+/// synthesizes nothing. Writes at most one message.
 ///
 /// # Safety
 ///
 /// `pMsg` and `pNumMsgs` must be valid for the counts they carry.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn PassThruWriteMsgs(
-    _ChannelID: u32,
+    ChannelID: u32,
     pMsg: *const crate::msg::PassThruMsg,
     pNumMsgs: *mut u32,
     _Timeout: u32,
@@ -164,30 +228,53 @@ pub unsafe extern "system" fn PassThruWriteMsgs(
     if pMsg.is_null() || pNumMsgs.is_null() {
         return ERR_NULL_PARAMETER;
     }
-    // The send PDU is built by engine::write_send_pdu from the app's bytes and
-    // held: the scaffold forwards nothing to a vehicle.
-    unsafe { write_u32(pNumMsgs, 0) };
-    engine::pending_hardware()
+    if ChannelID != CHANNEL_ID {
+        unsafe { write_u32(pNumMsgs, 0) };
+        return ERR_INVALID_CHANNEL_ID;
+    }
+    let data = unsafe { msg_data(pMsg) };
+    let status = crate::runtime::write(&data);
+    unsafe { write_u32(pNumMsgs, u32::from(status == STATUS_NOERROR)) };
+    status
 }
 
-/// `PassThruStartMsgFilter` — install a message filter.
+/// `PassThruStartMsgFilter` — install a flow-control filter from the CAN ids.
+///
+/// Reads the mask / pattern / flow-control CAN ids from the three `PASSTHRU_MSG`s
+/// and installs the recovered `VCX_PRO_AddFilter` flow-control record
+/// (`runtime::add_flow_filter`), returning its filter id.
 ///
 /// # Safety
 ///
 /// Pointer arguments must be null or valid `PASSTHRU_MSG`s.
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn PassThruStartMsgFilter(
-    _ChannelID: u32,
+    ChannelID: u32,
     _FilterType: u32,
-    _pMaskMsg: *const crate::msg::PassThruMsg,
-    _pPatternMsg: *const crate::msg::PassThruMsg,
-    _pFlowControlMsg: *const crate::msg::PassThruMsg,
+    pMaskMsg: *const crate::msg::PassThruMsg,
+    pPatternMsg: *const crate::msg::PassThruMsg,
+    pFlowControlMsg: *const crate::msg::PassThruMsg,
     pFilterID: *mut u32,
 ) -> Status {
     if pFilterID.is_null() {
         return ERR_NULL_PARAMETER;
     }
-    ERR_INVALID_CHANNEL_ID
+    if ChannelID != CHANNEL_ID {
+        return ERR_INVALID_CHANNEL_ID;
+    }
+    if pMaskMsg.is_null() || pPatternMsg.is_null() || pFlowControlMsg.is_null() {
+        return ERR_NULL_PARAMETER;
+    }
+    let mask = unsafe { msg_data(pMaskMsg) };
+    let pattern = unsafe { msg_data(pPatternMsg) };
+    let flow = unsafe { msg_data(pFlowControlMsg) };
+    match crate::runtime::add_flow_filter(&pattern, &mask, &flow) {
+        Ok(id) => {
+            unsafe { write_u32(pFilterID, id) };
+            STATUS_NOERROR
+        }
+        Err(status) => status,
+    }
 }
 
 /// `PassThruStopMsgFilter` — remove a filter.
@@ -196,8 +283,12 @@ pub unsafe extern "system" fn PassThruStartMsgFilter(
 ///
 /// Safe to call; both arguments are values.
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn PassThruStopMsgFilter(_ChannelID: u32, _FilterID: u32) -> Status {
-    ERR_INVALID_CHANNEL_ID
+pub unsafe extern "system" fn PassThruStopMsgFilter(ChannelID: u32, _FilterID: u32) -> Status {
+    if ChannelID != CHANNEL_ID {
+        return ERR_INVALID_CHANNEL_ID;
+    }
+    // The dongle clears filters on close; a per-filter clear is not yet wired.
+    STATUS_NOERROR
 }
 
 /// `PassThruIoctl` — a protocol/control operation.
@@ -261,11 +352,11 @@ pub unsafe extern "system" fn PassThruReadVersion(
     STATUS_NOERROR
 }
 
-/// The description [`PassThruGetLastError`] reports. A scaffold explains the
-/// pending-hardware stance rather than track per-call state.
+/// The description [`PassThruGetLastError`] reports. This driver does not track
+/// per-call error text, so it points the caller at the returned status code.
 // Kept under the 80-byte J2534 buffer so it is reported whole, not truncated.
 pub const LAST_ERROR_TEXT: &str =
-    "vcxtoolkit-j2534: native VCX exchange unproven; channel calls pending";
+    "vcxtoolkit-j2534 driver: see the status code returned by the last call";
 
 /// `PassThruGetLastError` — the text for the most recent failure.
 ///
@@ -284,43 +375,46 @@ pub unsafe extern "system" fn PassThruGetLastError(pErrorDescription: *mut c_cha
 #[cfg(test)]
 mod tests {
     use super::{
-        DEVICE_ID, PassThruClose, PassThruConnect, PassThruGetLastError, PassThruOpen,
+        CHANNEL_ID, DEVICE_ID, PassThruClose, PassThruConnect, PassThruGetLastError, PassThruOpen,
         PassThruReadVersion, PassThruWriteMsgs,
     };
     use crate::status::{
-        ERR_INVALID_PROTOCOL_ID, ERR_NOT_SUPPORTED, ERR_NULL_PARAMETER, STATUS_NOERROR,
+        ERR_DEVICE_NOT_CONNECTED, ERR_INVALID_DEVICE_ID, ERR_NOT_SUPPORTED, ERR_NULL_PARAMETER,
+        STATUS_NOERROR,
     };
     use core::ffi::c_char;
     use core::ptr;
 
+    // These tests never call PassThruOpen with a valid pointer, so no serial port
+    // is ever opened: they exercise only the no-device and validation paths and
+    // never touch COM4 or the owner's dongle. The live end-to-end bring-up is the
+    // `#[ignore]`d `com4_*` test below.
+
     #[test]
-    fn open_hands_back_the_device_id_and_rejects_a_null() {
-        let mut id = 0_u32;
-        assert_eq!(
-            unsafe { PassThruOpen(ptr::null(), &raw mut id) },
-            STATUS_NOERROR
-        );
-        assert_eq!(id, DEVICE_ID);
+    fn open_rejects_a_null_pointer_before_touching_hardware() {
+        // The null check returns before runtime::open, so no port is opened.
         assert_eq!(
             unsafe { PassThruOpen(ptr::null(), ptr::null_mut()) },
             ERR_NULL_PARAMETER
         );
+        // Close with no session is a no-op success; a wrong device id is rejected.
         assert_eq!(unsafe { PassThruClose(DEVICE_ID) }, STATUS_NOERROR);
+        assert_eq!(unsafe { PassThruClose(999) }, ERR_INVALID_DEVICE_ID);
     }
 
     #[test]
-    fn connect_validates_the_protocol_then_reports_pending() {
+    fn connect_validates_and_reports_no_device_until_one_is_opened() {
         let mut ch = 0_u32;
-        // A good protocol (ISO 15765 = 6) passes validation but the hardware path
-        // is unproven: pending, and no channel id written.
+        // A good protocol (ISO 15765 = 6), but no device is open in this test, so
+        // the driver reports not-connected without opening COM4.
         assert_eq!(
             unsafe { PassThruConnect(DEVICE_ID, 6, 0, 500_000, &raw mut ch) },
-            ERR_NOT_SUPPORTED
+            ERR_DEVICE_NOT_CONNECTED
         );
-        // A bad protocol is rejected outright.
+        // A protocol with no native bring-up is not supported.
         assert_eq!(
             unsafe { PassThruConnect(DEVICE_ID, 99, 0, 0, &raw mut ch) },
-            ERR_INVALID_PROTOCOL_ID
+            ERR_NOT_SUPPORTED
         );
         // A null channel pointer is caught first.
         assert_eq!(
@@ -330,7 +424,7 @@ mod tests {
     }
 
     #[test]
-    fn a_write_reports_zero_sent_and_pending() {
+    fn a_write_without_a_device_is_not_connected() {
         let mut n = 7_u32;
         let msg = crate::msg::PassThruMsg {
             ProtocolID: 6,
@@ -342,8 +436,8 @@ mod tests {
             Data: [0; crate::msg::DATA_MAX],
         };
         assert_eq!(
-            unsafe { PassThruWriteMsgs(1, &raw const msg, &raw mut n, 100) },
-            ERR_NOT_SUPPORTED
+            unsafe { PassThruWriteMsgs(CHANNEL_ID, &raw const msg, &raw mut n, 100) },
+            ERR_DEVICE_NOT_CONNECTED
         );
         assert_eq!(n, 0, "nothing was transmitted");
     }
@@ -376,11 +470,67 @@ mod tests {
             unsafe { PassThruGetLastError(buf.as_mut_ptr()) },
             STATUS_NOERROR
         );
-        assert!(cstr(&buf).contains("pending"));
+        assert!(cstr(&buf).contains("vcxtoolkit-j2534"));
         assert_eq!(
             unsafe { PassThruGetLastError(ptr::null_mut()) },
             ERR_NULL_PARAMETER
         );
+    }
+
+    // End-to-end bring-up against the real VCX-NANO on COM4. It opens the dongle,
+    // runs the recovered connect sequence, and installs the flow-control filter,
+    // then closes. It sends NO vehicle request (no PassThruWriteMsgs): like
+    // device.rs's com4 test, the bring-up configures the channel on the dongle and
+    // transmits nothing to the ECU. An actual read is the owner's to drive through
+    // a real J2534 app.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "needs the VCX-NANO on COM4; runs the dongle bring-up, sends no vehicle request"]
+    fn com4_opens_connects_and_filters_without_sending() {
+        let mut id = 0_u32;
+        assert_eq!(
+            unsafe { PassThruOpen(ptr::null(), &raw mut id) },
+            STATUS_NOERROR
+        );
+        assert_eq!(id, DEVICE_ID);
+        let mut ch = 0_u32;
+        assert_eq!(
+            unsafe { PassThruConnect(DEVICE_ID, 6, 0, 500_000, &raw mut ch) },
+            STATUS_NOERROR
+        );
+        assert_eq!(ch, CHANNEL_ID);
+        let filter_msg = |bytes: &[u8]| {
+            let mut m = crate::msg::PassThruMsg {
+                ProtocolID: 6,
+                RxStatus: 0,
+                TxFlags: 0,
+                Timestamp: 0,
+                DataSize: u32::try_from(bytes.len()).unwrap(),
+                ExtraDataIndex: 0,
+                Data: [0; crate::msg::DATA_MAX],
+            };
+            m.Data[..bytes.len()].copy_from_slice(bytes);
+            m
+        };
+        // FLOW_CONTROL filter: mask FF FF FF FF, pattern = resp id 7E8, flow = req id 7E0.
+        let mask = filter_msg(&[0xFF, 0xFF, 0xFF, 0xFF]);
+        let pattern = filter_msg(&[0x00, 0x00, 0x07, 0xE8]);
+        let flow = filter_msg(&[0x00, 0x00, 0x07, 0xE0]);
+        let mut fid = 0_u32;
+        assert_eq!(
+            unsafe {
+                super::PassThruStartMsgFilter(
+                    CHANNEL_ID,
+                    3,
+                    &raw const mask,
+                    &raw const pattern,
+                    &raw const flow,
+                    &raw mut fid,
+                )
+            },
+            STATUS_NOERROR
+        );
+        assert_eq!(unsafe { PassThruClose(DEVICE_ID) }, STATUS_NOERROR);
     }
 
     fn cstr(buf: &[c_char]) -> String {
