@@ -265,10 +265,32 @@ impl std::error::Error for ReplyError {}
 ///
 /// Returns [`ForwardError::TooLong`] when `uds` exceeds [`crate::MAX_FORWARD`].
 pub fn frame_identity_request(uds: &[u8]) -> Result<Vec<u8>, ForwardError> {
+    // Flags 0: an ordinary request carries no tx-flag rewrites (forward::pdu_flags).
+    frame_identity_request_with_flags(0, uds)
+}
+
+/// The VCX `VCX_PRO_Send` PDU flag that pads an ISO 15765 single frame to 8 CAN data
+/// bytes — the J2534 `ISO15765_FRAME_PAD` `TxFlag` (`0x40`).
+///
+/// Recovered from `VCXPT32!ConvertPassthruMsg` (`FUN_10005df0`): for an ISO 15765
+/// channel it maps the caller's `PASSTHRU_MSG.TxFlags` bit `0x40` onto VCX PDU flag
+/// bit `0x200` (`*pdu |= 0x200`). GM ECUs ignore an unpadded single frame, so a GM
+/// read sets this; the vendor J2534 path sets it via the link's `pad_frames`.
+pub const ISO15765_FRAME_PAD: u32 = 0x200;
+
+/// Frame an ISO 15765 request with explicit VCX PDU `flags` (e.g.
+/// [`ISO15765_FRAME_PAD`]).
+///
+/// Same framing as [`frame_identity_request`] (the caller's bytes are copied to PDU
+/// offset 6 unchanged), but the `flags` dword is caller-chosen instead of `0`.
+///
+/// # Errors
+///
+/// Returns [`ForwardError::TooLong`] when `uds` exceeds [`crate::MAX_FORWARD`].
+pub fn frame_identity_request_with_flags(flags: u32, uds: &[u8]) -> Result<Vec<u8>, ForwardError> {
     // ISO 15765 copies the caller's bytes to offset 6 unchanged (no check byte).
     let data = crate::forward::copied_data(ISO15765_PROTOCOL, uds, false)?;
-    // Flags 0: an ordinary request carries no tx-flag rewrites (forward::pdu_flags).
-    crate::forward::send_payload(0, &data)
+    crate::forward::send_payload(flags, &data)
 }
 
 /// The recovered GMLAN `$1A` request application bytes for one identifier.
