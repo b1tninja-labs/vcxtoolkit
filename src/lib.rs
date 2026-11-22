@@ -19,11 +19,16 @@
 //! `pci_type` names the first byte when that data is already an ISO 15765 frame.
 //! `flow_control` names the three bytes that follow when that byte is flow control.
 //! `first_length` and `sequence_number` name the other two PCI fields.
+//! `cli` is the command line: a `doctor` pre-flight that reads `GetInfo`, and a
+//! held `collect`. `modread` serializes the saved module read `spskit-vit1` reads,
+//! and `collect` gates the vehicle read that would fill it. That read stays held.
 //! On Windows it opens the USB serial port and exchanges one frame.
 //! It does not write the license or the firmware to the device, and it does not
 //! program a vehicle.
 
 mod catalog;
+pub mod cli;
+pub mod collect;
 mod comm;
 mod command;
 mod dfu;
@@ -34,6 +39,7 @@ mod hash;
 mod image;
 mod info;
 mod license_info;
+pub mod modread;
 mod pci;
 mod remote;
 mod serial;

@@ -47,6 +47,21 @@ retrieves the server license, `fetch_firmware` downloads the listed image, and
 
 The crate is not published (`publish = false`).
 
+## Command line
+
+The `vcxtoolkit` binary has two subcommands:
+
+    vcxtoolkit doctor --port COM4     # open the VCX and read GetInfo (safe pre-flight)
+    vcxtoolkit collect --ecu BECM     # build the module-read plan; the vehicle send is HELD
+
+`doctor` (alias `info`) opens the USB serial port, sends the empty `GetInfo`, and
+prints the device. It opens no vehicle channel. `collect` builds the ISO 15765
+collection plan and the saved-read skeleton `spskit-vit1` consumes, then refuses to
+transmit: the live read is the open `ROADMAP.md` row, and its request and
+`VCX_PRO_Recv` bytes are not recovered. The operator runbook is
+[docs/collect.md](docs/collect.md); the saved-read format is
+[docs/module-read.md](docs/module-read.md).
+
 ## Develop
 
     cargo fmt --check

@@ -8,6 +8,10 @@ license = "Apache-2.0"
 readme = "README.md"
 publish = false
 
+[[bin]]
+name = "vcxtoolkit"
+path = "src/main.rs"
+
 [target.'cfg(windows)'.dependencies]
 vcxtoolkit-open = { path = "winport", version = "0.1.0" }
 
