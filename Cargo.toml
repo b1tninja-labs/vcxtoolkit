@@ -1,3 +1,15 @@
+[workspace]
+members = ["j2534"]
+# `winport` stays a path dependency, not a workspace member, exactly as it was
+# before the J2534 crate was added: it keeps its own `unsafe_code = "deny"`
+# boundary and its own formatting, and the gates do not reformat a file this
+# change never touched.
+exclude = ["winport"]
+# The four gates run from this directory with no `--workspace` flag (AGENTS.md).
+# `default-members` makes that single pass cover the root crate and the cdylib
+# member, holding the DLL to the same fmt/clippy/test/doc bar as the library.
+default-members = [".", "j2534"]
+
 [package]
 name = "vcxtoolkit"
 version = "0.1.0"
