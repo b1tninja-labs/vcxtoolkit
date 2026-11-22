@@ -135,9 +135,12 @@ sequence and nothing past it:
    `ProStart`, with the layouts above. The integers those functions copy are not
    in either program, so a concrete channel open is not yet a frame.
 3. `VCX_PRO_Send` of a PDU whose prefix is recovered and whose bytes at offset 6
-   are not. Those unrecovered bytes are the ones a vehicle ECU would see, and
-   only if the dongle forwards them. Which ECU, and which request, is not in
-   `VCX.dll` or `ManagerCenter.exe`.
+   are not in the VXDIAG binaries. Those bytes are the ones a vehicle ECU would
+   see, and only if the dongle forwards them. The GM SPS application layer
+   (`spsvcs.dll`, the dated subsection above) does recover the identity request's
+   content — service `$1A`, DID `0xB0` (DiagnosticAddress), single frame
+   `02 1A B0` — but not the `C1`..`CC` part-number sweep nor the concrete request
+   CAN id, so the full read is still not a frame.
 4. `VCX_PRO_Recv` for the reply. The export is virtualized. The copy out of
    its PDU is recovered and is below.
 5. `ProStop` and `ProClose`, empty payloads, the dongle.
@@ -155,10 +158,13 @@ and sends no request, and the live vehicle send stays held behind `vehicle_read_
 
 ### What a 2026-11-22 static pass settled, and what it did not
 
-The frame *envelope* for both directions is recovered; the vehicle-facing request
-*content* is not, so the open row stays open and `READ_LAYOUT_RECOVERED` stays
-`false`. Each claim below is anchored to a function, confirmed in the Ghidra
-project (VCX.dll is `vcx-reconstructed.dll`, base `0x7B2F0000`).
+The frame *envelope* for both directions is recovered. The vehicle-facing request
+*content* is not in the VXDIAG transport binaries; a later pass found it one layer
+up, in the GM SPS application (the dated subsection below), but a *full* identity
+read is still not a recovered frame, so the open row stays open and
+`READ_LAYOUT_RECOVERED` stays `false`. Each claim below is anchored to a function,
+confirmed in the Ghidra project (VCX.dll is `vcx-reconstructed.dll`, base
+`0x7B2F0000`).
 
 - **Send framing, recovered.** `VCX_PRO_Send` (`0x7B2F5740`) builds header
   `80`/caller/`00`/channel, stores the PDU flag dword byte-reversed, the length
@@ -175,19 +181,81 @@ project (VCX.dll is `vcx-reconstructed.dll`, base `0x7B2F0000`).
   flag bit 0 is set. The flag map and the per-protocol trailing drops are already
   `forward::rx_status`, `delivered_len`, and `reply_protocol`;
   `collect::reply_application_bytes` and `read_identity_reply` apply that envelope.
-- **Request content, absent.** No `$1A` request builder is in `VCX.dll`,
-  `ManagerCenter.exe`, or `VCXPT32.dll`. A byte-pattern search for the default DID
-  run `C1`..`CC` in `vcx-reconstructed.dll` matched only a coincidental monotonic
-  ramp (`b8 b9 … d7` at `0x7b3329a0`), not a request table. `ConvertPassthruMsg`
-  (`FUN_10005df0`) copies the caller's ISO 15765 `PASSTHRU_MSG.Data` to offset 6
-  unchanged — it forms no request of its own. The service id, the identifiers, and
-  the module CAN id are GM application-layer, built by the diagnostic software, not
-  by this transport. They are the open row, and `docs/tool-boundary.md` keeps them
-  out of this crate.
+- **Request content, absent from the VXDIAG transport.** No `$1A` request builder
+  is in `VCX.dll`, `ManagerCenter.exe`, or `VCXPT32.dll`. A byte-pattern search for
+  the default DID run `C1`..`CC` in `vcx-reconstructed.dll` matched only a
+  coincidental monotonic ramp (`b8 b9 … d7` at `0x7b3329a0`), not a request table.
+  `ConvertPassthruMsg` (`FUN_10005df0`) copies the caller's ISO 15765
+  `PASSTHRU_MSG.Data` to offset 6 unchanged — it forms no request of its own. The
+  service id, the identifiers, and the module CAN id are GM application-layer, built
+  by the diagnostic software one layer up, not by this transport. That application
+  layer was then read, below; the mapping onto these offset-6 bytes is at the
+  application-PDU seam, and `docs/tool-boundary.md` keeps the content out of this
+  crate.
 - **Recv export internals, blocked.** `VCX_PRO_Recv` (`0x7B2F58E0`) is a `jmp`
   into section `.V0`; its callees `FUN_7b585b66` / `FUN_7b44679c` decompile to
   garbage that reads uninitialized `EAX`/`EBP`/`CF` (VMProtect). Not statically
   recoverable, and not needed: the PDU it writes is laid out by `ConvertVCXMsg` above.
+
+### The `$1A` request content, from the GM SPS application (2026-11-22)
+
+The VXDIAG transport binaries carry no `$1A` builder (above) because the request is
+formed one layer up, in GM's SPS application. A static pass over `spsvcs.dll` (image
+base `0x10000000`, the `CVIT1` class) recovered it. These are application-layer
+anchors, not VXDIAG transport: they say what bytes a `$1A` identity read *is*, which
+the VXDIAG copy carries at a Send PDU's offset 6. Nothing here was sent, and the two
+remaining gaps below keep `READ_LAYOUT_RECOVERED` `false`.
+
+- **The identity read is service `$1A`, DID `0xB0` (DiagnosticAddress).**
+  `CVIT1` base-mapping read `FUN_10012a80` (`0x10012a80`); its debug string
+  `"ReadDataByIdentifier (0x1A) service with DID 0xB0 (DiagnosticAddress)"` is at
+  `0x100e6a78` (logged from `0x10012b96`). It builds a 12-byte request at
+  `*(this+4)` with these exact stores: `0x10012ba6` `buf[0]` = flags (`this+0x14`);
+  `0x10012bb0`–`0x10012be6` `buf[1..4]` = the target diagnostic address
+  (`this+0x224`) as a **big-endian** `u32`; `0x10012be9`–`0x10012c01` `buf[5..8]` =
+  `00 00 00 00`; `0x10012c08` `buf[9]` = `0xFE`; `0x10012c0f` `buf[10]` = `0x1A`
+  (service); `0x10012c16` `buf[11]` = `0xB0` (DID). It sends through the transport
+  object `this+0x11c`, `vtbl+0xC`, length `0xC`, at `0x10012c27`; success is `0x100`.
+- **Positive reply layout, consistent with the recovered Recv envelope.** The read
+  (`vtbl+0x10`, `0x10012c60`) requires reply length ≥ `0xC` (`0x10012c8c`),
+  `reply[0x0A] == 0x5A` (`0x10012c9c`), and `reply[0x0B] == 0xB0` (`0x10012ca6`) —
+  positive SID `0x5A` echoing DID `0xB0`, which is `collect::IDENTITY_POSITIVE_SID`
+  and the `$1A` echo rule already in the reply parser. The responder id is the
+  big-endian `u32` at `reply[5..8]` (`0x10012d10`), classified by CAN-id range
+  `0x641`..`0x65F` (`0x10012d40`) and, when `reply[0] == 0x04`, `0x7E8`..`0x7EF`
+  (`0x10012eef`) — the GMLAN and ISO 15765 physical response ids. Response-offset
+  flags are `id | 0x200` and `id | 0x500`.
+- **The framing generalizes across the GMLAN session services.** The 10-byte header
+  `[flags][addr BE u32][00 00 00 00][0xFE]` is built by the helper `FUN_10014580`
+  (`0x10014580`) and reused for ReturnToNormalMode `$20` (`FUN_10013340`,
+  `buf[10]=0x20`, length `0xB`), InitiateDiagnosticOperation `$10 02` disableAllDTCs
+  (`FUN_10013520`, `buf[10..11]=10 02`, length `0xC`), DisableNormalCommunication
+  `$28` (`buf[10]=0x28`, length `0xB`), and ReportProgrammedState `$A2`
+  (`buf[10]=0xA2`, length `0xB`). In every case the **application `A_Data` begins at
+  PDU offset 10** — request `[SID][sub…]`, reply `[SID|0x40][sub…]`. The leading 10
+  bytes are the SPS CAN-interface transport envelope (the object `this+0x11c`, the GM
+  CAN link opened in `FUN_100198a0`), not vehicle bytes.
+- **What maps onto the wire.** `spsvcs.dll` drives its own GM CAN interface, a
+  different stack from VXDIAG, so the mapping is at the application-PDU seam, not a
+  byte-identical transport. The GMLAN application bytes are `1A <DID>`; on ISO 15765
+  that is a single frame `02 1A <DID>` (PCI length `0x02`, then the two service
+  bytes). `ConvertPassthruMsg` (`FUN_10005df0`) copies the caller's ISO 15765
+  `PASSTHRU_MSG.Data` to Send PDU offset 6 **verbatim**, and the dongle adds the
+  ISO-TP single-frame PCI (see "What the pass-through copies"). So offset 6 carries
+  the CAN arbitration id and `1A <DID>`; the SPS `[flags][addr][0000][FE]` header
+  does **not** ride on the vehicle wire — the transport layer translates the addr
+  `u32` into the CAN request id.
+- **What is still not recovered.** Two pieces, so the open row stays open:
+  1. **The `C1`..`CC` part-number DID sweep.** `spsvcs.dll`'s `CVIT1` issues `$1A`
+     for DID `0xB0` only — a byte search for a `buf[10]=0x1A` store (`c6 ?? 0a 1a`)
+     matches a single site, `0x10012c0f`, and `ivcsSgm.dll` has no
+     `ReadDataByIdentifier` string or `$1A` builder at all. The `C1`..`CC` set in
+     `collect::DEFAULT_IDENTITY_LIDS` is the GMLAN part-number DID convention, not a
+     binary-anchored sweep.
+  2. **The concrete request CAN id.** The target address (`this+0x224`) is runtime
+     state, not an immediate in the binary; the base read uses a functional target
+     set at run time, with the per-responder physical ids coming back in
+     `reply[5..8]`.
 
 ## What the pass-through copies
 

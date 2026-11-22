@@ -45,13 +45,35 @@ pub const READ_LAYOUT_RECOVERED: bool = false;
 /// The GMLAN `$1A` identity and part slice a VIT1 clone reads from a controller.
 ///
 /// `C1`..`CA` are the ten part-number identifiers, `CB` and `CC` the hardware
-/// identifier `spskit`'s saved-read rules consume. The exact set a given
-/// controller answers is its request method; this is the common default the
-/// operator can override. These are the identifiers a read *would* request. Their
-/// on-wire request bytes are the unrecovered gap, so nothing here sends them.
+/// identifier `spskit`'s saved-read rules consume. These are the GMLAN
+/// part-number DID *convention*, not a recovered sweep: the 2026-11-22 static
+/// pass found `spsvcs.dll`'s `CVIT1` issues `$1A` for DID `0xB0`
+/// ([`DID_DIAGNOSTIC_ADDRESS`]) only, with no `1A C1`..`1A CC` loop in the GM
+/// binaries (`docs/reads.md`, "The `$1A` request content"). So this is the common
+/// default the operator can override, and the only identifier whose request is
+/// anchored to a function is `0xB0`. These are the identifiers a read *would*
+/// request; nothing here sends them.
 pub const DEFAULT_IDENTITY_LIDS: [u8; 12] = [
     0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xCB, 0xCC,
 ];
+
+/// The `ReadDataByIdentifier` service id of a GMLAN `$1A` identity read.
+///
+/// Recovered from `spsvcs.dll`'s `CVIT1` base-mapping read `FUN_10012a80`
+/// (`0x10012a80`): the request PDU stores `0x1A` at application offset 0
+/// (`buf[10]`, `0x10012c0f`), and its debug string at `0x100e6a78` names the
+/// service. The application `A_Data` of the request is `[IDENTITY_SERVICE][DID]`
+/// ([`identity_request_application`]).
+pub const IDENTITY_SERVICE: u8 = 0x1A;
+
+/// DID `0xB0` (`DiagnosticAddress`), the one identity DID anchored to a function.
+///
+/// `spsvcs.dll`'s `CVIT1` base-mapping read (`FUN_10012a80`, `0x10012a80`) issues
+/// `$1A B0` to learn the responder CAN ids (`buf[11] = 0xB0` at `0x10012c16`; the
+/// positive reply echoes `0x5A 0xB0`). The `C1`..`CC` part-number DIDs in
+/// [`DEFAULT_IDENTITY_LIDS`] share this request shape but are not themselves found
+/// as a sweep in the GM binaries.
+pub const DID_DIAGNOSTIC_ADDRESS: u8 = 0xB0;
 
 /// Why a vehicle-facing send is refused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -249,6 +271,80 @@ pub fn frame_identity_request(uds: &[u8]) -> Result<Vec<u8>, ForwardError> {
     crate::forward::send_payload(0, &data)
 }
 
+/// The recovered GMLAN `$1A` request application bytes for one identifier.
+///
+/// This is the `A_Data` the GM SPS application forms, recovered from
+/// `spsvcs.dll`'s `CVIT1` read `FUN_10012a80` (`docs/reads.md`, "The `$1A` request
+/// content"): the service id [`IDENTITY_SERVICE`] (`0x1A`) at offset 0, then the
+/// identifier at offset 1 — the bytes at PDU offset 10..11 in that function
+/// (`0x10012c0f`, `0x10012c16`). Only `did == `[`DID_DIAGNOSTIC_ADDRESS`] is
+/// anchored to a function; the `C1`..`CC` identifiers share this shape by
+/// convention ([`DEFAULT_IDENTITY_LIDS`]). This forms the bytes; it does not send
+/// them, and [`collect`][self] stays held behind [`vehicle_read_gate`].
+#[must_use]
+pub fn identity_request_application(did: u8) -> [u8; 2] {
+    [IDENTITY_SERVICE, did]
+}
+
+/// Why an application `A_Data` slice does not fit one ISO 15765 single frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SingleFrameError {
+    /// The slice is empty: a single frame carries at least one service byte.
+    Empty,
+    /// The slice is longer than the seven bytes a classical single frame holds
+    /// (ISO 15765-2:2016 §9.6.2.1); it would need first/consecutive frames.
+    TooLong {
+        /// The slice length that overflowed the single-frame length nibble.
+        len: usize,
+    },
+}
+
+impl std::fmt::Display for SingleFrameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => f.write_str("an ISO 15765 single frame carries at least one byte"),
+            Self::TooLong { len } => {
+                write!(
+                    f,
+                    "{len} application bytes do not fit one classical single frame"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for SingleFrameError {}
+
+/// Wrap application `A_Data` in a classical ISO 15765 single frame.
+///
+/// Prepends the single-frame PCI byte: high nibble `0000`, low nibble the data
+/// length (ISO 15765-2:2016 §9.6.1 Table 8, §9.6.2.1), so `1A B0` becomes
+/// `02 1A B0`. This is the on-wire shape the dongle builds for a short request —
+/// the pass-through copies the caller's bytes and the dongle adds this PCI
+/// (`docs/reads.md`, "What the pass-through copies"); modelling it here keeps the
+/// request a pure codec. [`crate::pci::single_service`] reads it back. Nothing
+/// here transmits; the send stays held behind [`vehicle_read_gate`].
+///
+/// # Errors
+///
+/// Returns [`SingleFrameError::Empty`] for no bytes, or
+/// [`SingleFrameError::TooLong`] when `app` exceeds seven bytes.
+pub fn iso15765_single_frame(app: &[u8]) -> Result<Vec<u8>, SingleFrameError> {
+    if app.is_empty() {
+        return Err(SingleFrameError::Empty);
+    }
+    // The low nibble holds the length, so a classical single frame fits 1..=7 bytes.
+    let pci = u8::try_from(app.len())
+        .ok()
+        .filter(|&len| len <= 7)
+        .ok_or(SingleFrameError::TooLong { len: app.len() })?;
+    let mut frame = Vec::with_capacity(1 + app.len());
+    // High nibble 0 is a single frame; the low nibble is the data length.
+    frame.push(pci);
+    frame.extend_from_slice(app);
+    Ok(frame)
+}
+
 /// The ISO 15765 application bytes a reply PDU delivers, per the recovered envelope.
 ///
 /// `VCX_PRO_Recv` fills the PDU and `VCXPT32!ConvertVCXMsg` (`FUN_10006070`,
@@ -310,9 +406,10 @@ pub fn read_identity_reply(pdu: &[u8], identifier: u8) -> Result<Vec<u8>, ReplyE
 #[cfg(test)]
 mod tests {
     use super::{
-        CollectPlan, DEFAULT_IDENTITY_LIDS, GateRefusal, IDENTITY_POSITIVE_SID,
-        READ_LAYOUT_RECOVERED, ReplyError, frame_identity_request, read_identity_reply,
-        reply_application_bytes, vehicle_read_gate,
+        CollectPlan, DEFAULT_IDENTITY_LIDS, DID_DIAGNOSTIC_ADDRESS, GateRefusal,
+        IDENTITY_POSITIVE_SID, IDENTITY_SERVICE, READ_LAYOUT_RECOVERED, ReplyError,
+        SingleFrameError, frame_identity_request, identity_request_application,
+        iso15765_single_frame, read_identity_reply, reply_application_bytes, vehicle_read_gate,
     };
 
     #[test]
@@ -379,6 +476,63 @@ mod tests {
         pdu.extend_from_slice(&u16::try_from(data.len()).unwrap().to_le_bytes());
         pdu.extend_from_slice(data);
         pdu
+    }
+
+    #[test]
+    fn the_recovered_request_is_service_1a_then_the_identifier() {
+        // Anchored in spsvcs.dll CVIT1 FUN_10012a80: buf[10]=0x1A (0x10012c0f),
+        // buf[11]=DID (0x10012c16). Only 0xB0 is anchored to a function; C1..CC
+        // share the shape by GMLAN convention.
+        assert_eq!(IDENTITY_SERVICE, 0x1A);
+        assert_eq!(DID_DIAGNOSTIC_ADDRESS, 0xB0);
+        let mut dids = vec![DID_DIAGNOSTIC_ADDRESS];
+        dids.extend_from_slice(&DEFAULT_IDENTITY_LIDS);
+        for did in dids {
+            // Application A_Data is [0x1A, DID].
+            assert_eq!(identity_request_application(did), [0x1A, did]);
+            // On ISO 15765 that is the single frame 02 1A <DID>.
+            let frame = iso15765_single_frame(&identity_request_application(did)).unwrap();
+            assert_eq!(frame, vec![0x02, 0x1A, did]);
+            // And it reads back through the recovered PCI codecs.
+            assert_eq!(crate::pci::single_service(&frame), Some(0x1A));
+            assert_eq!(
+                crate::pci::pci_type(frame[0]),
+                crate::pci::PciType::Single { length: Some(2) },
+            );
+        }
+    }
+
+    #[test]
+    fn a_single_frame_fits_one_to_seven_bytes() {
+        assert_eq!(iso15765_single_frame(&[]), Err(SingleFrameError::Empty));
+        assert_eq!(
+            iso15765_single_frame(&[0x1A, 0xB0]).unwrap(),
+            vec![0x02, 0x1A, 0xB0],
+        );
+        // Seven bytes is the classical maximum; the PCI low nibble is the length.
+        assert_eq!(iso15765_single_frame(&[0u8; 7]).unwrap()[0], 0x07);
+        assert_eq!(
+            iso15765_single_frame(&[0u8; 8]),
+            Err(SingleFrameError::TooLong { len: 8 }),
+        );
+    }
+
+    #[test]
+    fn the_b0_base_read_request_matches_its_recovered_reply_echo() {
+        // The one anchored identity read: request 02 1A B0; the positive reply
+        // echoes 5A B0 (reply[0x0A]=0x5A, reply[0x0B]=0xB0 in FUN_10012a80).
+        let request =
+            iso15765_single_frame(&identity_request_application(DID_DIAGNOSTIC_ADDRESS)).unwrap();
+        assert_eq!(request, vec![0x02, 0x1A, 0xB0]);
+        // A positive reply PDU in the recovered envelope, two data bytes after the echo.
+        let pdu = reply_pdu(
+            0,
+            &[IDENTITY_POSITIVE_SID, DID_DIAGNOSTIC_ADDRESS, 0x07, 0xE8],
+        );
+        assert_eq!(
+            read_identity_reply(&pdu, DID_DIAGNOSTIC_ADDRESS),
+            Ok(vec![0x07, 0xE8]),
+        );
     }
 
     #[test]
