@@ -113,7 +113,10 @@ pub use remote::{fetch_firmware, fetch_license, fetch_newer_firmware};
 pub use serial::USB_BAUD;
 #[cfg(windows)]
 pub use serial::{Call, OpenError, Port, State, open_usb};
-pub use update::{Kept, Refused, UpdatePlan, UpdateStep, hold, plan_firmware};
+pub use update::{
+    FLASH_SEQUENCE_RECOVERED, FlashRefusal, Kept, Refused, UpdatePlan, UpdateStep, flash_gate,
+    hold, plan_firmware,
+};
 
 /// The name of this crate, as Cargo knows it.
 #[must_use]
