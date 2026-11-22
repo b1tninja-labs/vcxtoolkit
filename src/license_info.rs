@@ -245,7 +245,7 @@ fn raw_serial(frame: &crate::Frame) -> Option<[u8; 8]> {
 #[derive(Debug)]
 pub enum LicenseReadError {
     /// The port exchange failed.
-    Exchange(crate::ExchangeError),
+    Exchange(crate::ExchangeError<crate::OpenError>),
     /// The `GetInfo` reply did not hold the raw serial.
     Info,
     /// The `80 00 A0 00` reply was not a zero status and eight bytes.

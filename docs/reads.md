@@ -145,6 +145,14 @@ sequence and nothing past it:
 Step 3 is the open row. It stays open because the inner bytes are not recovered.
 Inventing them would be a frame this note does not have.
 
+The *transport* of this sequence — open the channel, write a caller-supplied framed
+request, read the reply — is `src/device.rs` (`Channel`), built on the same
+`SerialPort` seam `doctor`/`GetInfo` uses and exercised end to end by an in-process
+fake serial. It wraps no `$1A` content (the caller passes the bytes
+`collect::frame_identity_request` builds) and transmits nothing on its own: the only
+real-hardware path is an `#[ignore]`d test that opens the channel against the dongle
+and sends no request, and the live vehicle send stays held behind `vehicle_read_gate`.
+
 ### What a 2026-11-22 static pass settled, and what it did not
 
 The frame *envelope* for both directions is recovered; the vehicle-facing request

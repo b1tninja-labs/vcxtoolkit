@@ -5,7 +5,10 @@
 - Library code lives under `src/`; keep `lib.rs` to module declarations and re-exports.
   `command` names the headers, the `VCX_DEV_Config` copy lengths, and the
   device-command payloads, including the `SynExInfo` exchange. `frame` packs one frame and splits the send and receive export buffers. `info` reads the logged `GetInfo`
-  fields. `exchange` writes one frame and reads the reply. `image` reads a firmware header
+  fields. `exchange` writes one frame and reads the reply over the `SerialPort`
+  seam, so a fake serial drives it in tests; `device` composes that seam into the
+  channel-open plus Send/Recv exchange a vehicle read would use, still held behind
+  the `collect` gate. `image` reads a firmware header
   and the packed page records.
   `license_info` reads the on-device license buffer and derives the key half. `catalog` reads the firmware catalog.
   `remote` retrieves a license and a catalog firmware image. `serial` opens the USB port.
