@@ -23,6 +23,9 @@
 //! held `collect`. `modread` serializes the saved module read `spskit-vit1` reads,
 //! and `collect` gates the vehicle read that would fill it. That read stays held.
 //! On Windows it opens the USB serial port and exchanges one frame.
+//! `exchange` drives that frame over the `SerialPort` seam, and `device` composes
+//! the seam into the channel-open plus Send/Recv exchange a vehicle read would use,
+//! driven by a fake serial in tests and held behind the `collect` gate on hardware.
 //! It does not write the license or the firmware to the device, and it does not
 //! program a vehicle.
 
@@ -31,6 +34,7 @@ pub mod cli;
 pub mod collect;
 mod comm;
 mod command;
+mod device;
 mod dfu;
 mod exchange;
 mod forward;
@@ -59,14 +63,14 @@ pub use command::{
     device_time, get_pin_vol, pin_reading, pro_send_header, reset_ex, reset_payload, set_beep,
     set_led, set_pin_vol, syn_ex_info, test_record, wait_reply,
 };
+pub use device::{Channel, DeviceError, INVALID_COMMAND};
 pub use dfu::{
     BOOT_MODE, BOOT_POLLS, Built, DFU_NAME_OFFSET, DFU_SERIAL_OFFSET, DfuError, LEAVE_MODE,
     LEAVE_POLLS, NAME_DIALOG, NAME_DIALOG_CAPTION, NAME_DIALOG_FLAGS, POLL_WAIT, RewriteError,
     dfu_get_info, dfu_serial, erase_chip, flash_length_fits, get_mode, in_boot, left_boot,
     name_blocks, poll_passes, rewrite_page, set_mode, write_flash, write_serial,
 };
-#[cfg(windows)]
-pub use exchange::{ExchangeError, exchange};
+pub use exchange::{Deadline, ExchangeError, Patience, SerialPort, exchange, exchange_with};
 pub use forward::{
     BATTERY_QUERY, BATTERY_SEED, ChannelFields, ClassPick, ComRecord, FILTER_CLEAR, FILTER_PASS,
     FilterCopy, FilterRecord, ForwardError, INIT_WAIT, MAX_FORWARD, NibblePath, Periodic,

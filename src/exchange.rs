@@ -1,15 +1,99 @@
 //! One request on the port and the first reply.
 //!
+//! The read and write are driven through the [`SerialPort`] trait, so the same
+//! logic runs against the real USB port (which implements it on Windows) and
+//! against an in-process fake in tests. The pacing of empty reads is a separate
+//! [`Patience`] seam: on hardware [`Deadline`] sleeps between tries and gives up
+//! at a wall-clock deadline; a test can give up after a fixed number of tries
+//! without sleeping.
+//!
 //! Treating a buffer with no closing `0xBB` as a finished frame made
 //! `a_truncated_buffer_is_not_a_frame` fail, and that return was restored.
 
-#[cfg(windows)]
 use std::time::{Duration, Instant};
 
 const MARKER: u8 = 0xBB;
 
-#[cfg(windows)]
 const EMPTY_READ_PAUSE: Duration = Duration::from_millis(10);
+
+/// A byte-oriented serial port: the read and write [`exchange`] drives.
+///
+/// [`crate::Port`] implements this on Windows. A fake serial implements it in
+/// tests, so the whole open/send/recv sequence runs over canned bytes.
+pub trait SerialPort {
+    /// The error a read or write can return.
+    type Error;
+
+    /// Read the bytes already buffered into `buf`, returning how many.
+    ///
+    /// Zero means none were ready yet; more may arrive on a later read.
+    ///
+    /// # Errors
+    ///
+    /// Returns the port's own read failure.
+    fn read(&self, buf: &mut [u8]) -> Result<usize, Self::Error>;
+
+    /// Write `buf`, returning how many bytes the port accepted.
+    ///
+    /// # Errors
+    ///
+    /// Returns the port's own write failure.
+    fn write(&self, buf: &[u8]) -> Result<usize, Self::Error>;
+}
+
+#[cfg(windows)]
+impl SerialPort for crate::Port {
+    type Error = crate::OpenError;
+
+    fn read(&self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        crate::Port::read(self, buf)
+    }
+
+    fn write(&self, buf: &[u8]) -> Result<usize, Self::Error> {
+        crate::Port::write(self, buf)
+    }
+}
+
+/// Decides whether to keep waiting after the port made no progress.
+///
+/// The read loop and the write loop consult it only after a read returned no
+/// bytes, or a write accepted none. Returning `false` ends the exchange with
+/// [`ExchangeError::Timeout`].
+pub trait Patience {
+    /// Called after the port made no progress. `true` tries again, `false` gives up.
+    fn keep_waiting(&mut self) -> bool;
+}
+
+/// A [`Patience`] that waits until a wall-clock deadline, pausing between tries.
+///
+/// This is the hardware pacing: it sleeps a short fixed pause between empty
+/// reads so the thread does not spin, and gives up once `timeout` has elapsed.
+#[derive(Clone, Copy, Debug)]
+pub struct Deadline {
+    until: Instant,
+}
+
+impl Deadline {
+    /// A deadline `timeout` from now.
+    #[must_use]
+    pub fn new(timeout: Duration) -> Self {
+        Self {
+            until: Instant::now() + timeout,
+        }
+    }
+}
+
+impl Patience for Deadline {
+    fn keep_waiting(&mut self) -> bool {
+        if Instant::now() >= self.until {
+            return false;
+        }
+        // A completed read or write of nothing is not progress. Pause so this
+        // thread does not spin, then check the deadline again.
+        std::thread::sleep(EMPTY_READ_PAUSE);
+        Instant::now() < self.until
+    }
+}
 
 /// The first slice of `buf` that [`crate::unpack`] accepts.
 ///
@@ -33,15 +117,9 @@ fn first_frame(buf: &[u8]) -> Option<crate::Frame> {
 
 /// Pack `header` and `payload`, write every packed byte, and read one reply.
 ///
-/// The read timeout stays as [`crate::open_usb`] set it, so an empty driver
-/// buffer makes [`crate::Port::read`] return 0 at once. This sleeps 10 ms
-/// between those empty reads and gives up when `timeout` has elapsed. It does
-/// not start a thread. The only bytes it writes are the frame packed from
-/// `header` and `payload`.
-///
-/// Each candidate is a `0xBB`…`0xBB` slice passed to [`crate::unpack`]. The
-/// first slice that unpacks is the reply. Bytes after that frame are left
-/// unread.
+/// This is [`exchange_with`] with a [`Deadline`] built from `timeout`, the pacing
+/// the live USB port uses. The only bytes it writes are the frame packed from
+/// `header` and `payload`; it opens no channel of its own.
 ///
 /// # Errors
 ///
@@ -49,36 +127,56 @@ fn first_frame(buf: &[u8]) -> Option<crate::Frame> {
 /// [`ExchangeError::Write`] when the write fails, [`ExchangeError::Read`] when
 /// a read fails, and [`ExchangeError::Timeout`] when the deadline passes with
 /// no complete frame.
-#[cfg(windows)]
 #[must_use = "a reply that is dropped was not read"]
-pub fn exchange(
-    port: &crate::Port,
+pub fn exchange<S: SerialPort>(
+    port: &S,
     header: [u8; 4],
     payload: &[u8],
     timeout: Duration,
-) -> Result<crate::Frame, ExchangeError> {
+) -> Result<crate::Frame, ExchangeError<S::Error>> {
+    let mut patience = Deadline::new(timeout);
+    exchange_with(port, header, payload, &mut patience)
+}
+
+/// Pack `header` and `payload`, write every packed byte, and read one reply,
+/// pacing empty reads with `patience`.
+///
+/// Each candidate reply is a `0xBB`…`0xBB` slice passed to [`crate::unpack`]. The
+/// first slice that unpacks is the reply. Bytes after that frame are left unread.
+/// It does not start a thread.
+///
+/// # Errors
+///
+/// Returns [`ExchangeError::Pack`] when [`crate::pack`] refuses the payload,
+/// [`ExchangeError::Write`] when the write fails, [`ExchangeError::Read`] when
+/// a read fails, and [`ExchangeError::Timeout`] when `patience` gives up before
+/// a complete frame is buffered.
+#[must_use = "a reply that is dropped was not read"]
+pub fn exchange_with<S: SerialPort, P: Patience>(
+    port: &S,
+    header: [u8; 4],
+    payload: &[u8],
+    patience: &mut P,
+) -> Result<crate::Frame, ExchangeError<S::Error>> {
     let packed = crate::pack(header, payload).map_err(ExchangeError::Pack)?;
-    let deadline = Instant::now() + timeout;
-    write_packed(port, &packed, deadline)?;
-    read_frame(port, deadline)
+    write_all(port, &packed, patience)?;
+    read_frame(port, patience)
 }
 
 /// Why [`exchange`] did not return a frame.
-#[cfg(windows)]
 #[derive(Debug)]
-pub enum ExchangeError {
+pub enum ExchangeError<E> {
     /// [`crate::pack`] refused the header and payload.
     Pack(crate::FrameError),
-    /// The overlapped write failed.
-    Write(crate::OpenError),
-    /// The overlapped read failed.
-    Read(crate::OpenError),
-    /// The deadline passed before a complete frame was buffered.
+    /// The write failed.
+    Write(E),
+    /// The read failed.
+    Read(E),
+    /// [`Patience`] gave up before a complete frame was buffered.
     Timeout,
 }
 
-#[cfg(windows)]
-impl std::fmt::Display for ExchangeError {
+impl<E: std::fmt::Display> std::fmt::Display for ExchangeError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Pack(error) => write!(f, "pack: {error}"),
@@ -89,8 +187,7 @@ impl std::fmt::Display for ExchangeError {
     }
 }
 
-#[cfg(windows)]
-impl std::error::Error for ExchangeError {
+impl<E: std::error::Error + 'static> std::error::Error for ExchangeError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Pack(error) => Some(error),
@@ -100,18 +197,19 @@ impl std::error::Error for ExchangeError {
     }
 }
 
-#[cfg(windows)]
-fn write_packed(port: &crate::Port, bytes: &[u8], deadline: Instant) -> Result<(), ExchangeError> {
+fn write_all<S: SerialPort, P: Patience>(
+    port: &S,
+    bytes: &[u8],
+    patience: &mut P,
+) -> Result<(), ExchangeError<S::Error>> {
     let mut sent = 0;
     while sent < bytes.len() {
         let accepted = port.write(&bytes[sent..]).map_err(ExchangeError::Write)?;
         let advanced = accepted.min(bytes.len() - sent);
         if advanced == 0 {
-            if Instant::now() >= deadline {
+            if !patience.keep_waiting() {
                 return Err(ExchangeError::Timeout);
             }
-            // A completed write of nothing is not progress. Pause so this thread does not spin.
-            std::thread::sleep(EMPTY_READ_PAUSE);
             continue;
         }
         sent += advanced;
@@ -119,17 +217,18 @@ fn write_packed(port: &crate::Port, bytes: &[u8], deadline: Instant) -> Result<(
     Ok(())
 }
 
-#[cfg(windows)]
-fn read_frame(port: &crate::Port, deadline: Instant) -> Result<crate::Frame, ExchangeError> {
+fn read_frame<S: SerialPort, P: Patience>(
+    port: &S,
+    patience: &mut P,
+) -> Result<crate::Frame, ExchangeError<S::Error>> {
     let mut buf = Vec::new();
     loop {
-        if Instant::now() >= deadline {
-            return Err(ExchangeError::Timeout);
-        }
         let mut scratch = [0_u8; 256];
         let got = port.read(&mut scratch).map_err(ExchangeError::Read)?;
         if got == 0 {
-            std::thread::sleep(EMPTY_READ_PAUSE);
+            if !patience.keep_waiting() {
+                return Err(ExchangeError::Timeout);
+            }
             continue;
         }
         buf.extend_from_slice(&scratch[..got]);
@@ -180,10 +279,9 @@ mod tests {
         assert_eq!(frame.payload, [] as [u8; 0]);
     }
 
-    #[cfg(windows)]
     #[test]
     fn timeout_says_the_deadline_passed() {
-        let error = super::ExchangeError::Timeout;
+        let error: super::ExchangeError<std::io::Error> = super::ExchangeError::Timeout;
         assert_eq!(error.to_string(), "no complete frame before the deadline");
         assert!(std::error::Error::source(&error).is_none());
     }
