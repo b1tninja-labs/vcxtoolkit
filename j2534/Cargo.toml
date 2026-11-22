@@ -1,0 +1,27 @@
+[package]
+name = "vcxtoolkit-j2534"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "An SAE J2534-1 pass-through DLL hosting the native VCX-NANO through the safe vcxtoolkit codecs"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+# cdylib is the J2534 PassThru* DLL a diagnostic app loads; rlib lets the safe
+# logic (status, message, raw-mode, registry record) carry its own unit tests.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+vcxtoolkit = { path = "..", version = "0.1.0" }
+
+[lints.rust]
+# `deny`, not `forbid`: the FFI module needs `unsafe` to cross the C ABI, and
+# `#[allow(unsafe_code)]` there makes every such site explicit and auditable.
+# The library crate stays `forbid`; this manifest does not relax it.
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

@@ -10,6 +10,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "vcxtoolkit-j2534"
+version = "0.1.0"
+dependencies = [
+ "vcxtoolkit",
+]
+
+[[package]]
 name = "vcxtoolkit-open"
 version = "0.1.0"
 dependencies = [
