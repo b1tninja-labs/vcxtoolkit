@@ -13,21 +13,31 @@
 //! `#[allow(unsafe_code)]`, with the crate lint set to `deny`; the library stays
 //! `forbid`. See `docs/j2534.md` for the full design.
 //!
-//! **Status: scaffold.** The exports' signatures, the `PASSTHRU_MSG` layout, the
-//! raw-mode CAN-id convention, the J2534→VCX mapping, and the
-//! `PassThruSupport.04.04` registry record are all here and tested. The
-//! channel-bearing calls return `ERR_NOT_SUPPORTED` (pending): the native VCX
-//! vehicle exchange is unproven on hardware (a bench `TesterPresent` returns a
-//! dongle status, no vehicle), and this host does not claim a link it cannot
-//! prove. Nothing here transmits to a vehicle, and nothing writes the registry;
-//! `registry` builds the install plan and holds it, the way `vcxtoolkit::collect`
-//! holds a vehicle read.
+//! **Status: native driver.** On Windows the exports open the dongle and drive
+//! the recovered, hardware-accepted sequence through the reusable
+//! [`vcxtoolkit::Channel`] primitives (one copy in the library, shared with any
+//! other consumer): `PassThruConnect` runs `Channel::connect_with`
+//! (`VCX_PRO_Open(0x8001)` → `SetComParam` → `SetFilter` → `Start`),
+//! `PassThruStartMsgFilter` installs the flow-control filter
+//! (`add_flow_control_filter_with`), `PassThruWriteMsgs` sends through
+//! `VCX_PRO_Send` (`send_raw_with`), and `PassThruReadMsgs` reads the pushed reply
+//! frame (`read_msg_with`) and parses the recovered Recv envelope. The bring-up is
+//! unit-tested over the serial seam in the library; the live COM4 bring-up is an
+//! `#[ignore]`d owner-run test that sends no vehicle request.
+//!
+//! The read model is confirmed: a static read of `VCXPT32.dll` shows
+//! `PassThruReadMsgs` issues no transmit — the ECU reply is pushed and an
+//! arrival-driven callback enqueues it, so the driver reads a queued frame and
+//! sends no `VCX_PRO_Recv` request. This host synthesizes no vehicle content (the
+//! app owns `Data`), never writes the registry (`registry` builds the plan and
+//! holds it), and never flips `vcxtoolkit::collect::READ_LAYOUT_RECOVERED`.
 
 pub mod engine;
 pub mod ffi;
 pub mod msg;
 pub mod rawmode;
 pub mod registry;
+pub(crate) mod runtime;
 pub mod status;
 
 /// The name of this crate, as Cargo knows it.
