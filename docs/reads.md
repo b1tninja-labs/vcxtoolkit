@@ -145,6 +145,42 @@ sequence and nothing past it:
 Step 3 is the open row. It stays open because the inner bytes are not recovered.
 Inventing them would be a frame this note does not have.
 
+### What a 2026-11-22 static pass settled, and what it did not
+
+The frame *envelope* for both directions is recovered; the vehicle-facing request
+*content* is not, so the open row stays open and `READ_LAYOUT_RECOVERED` stays
+`false`. Each claim below is anchored to a function, confirmed in the Ghidra
+project (VCX.dll is `vcx-reconstructed.dll`, base `0x7B2F0000`).
+
+- **Send framing, recovered.** `VCX_PRO_Send` (`0x7B2F5740`) builds header
+  `80`/caller/`00`/channel, stores the PDU flag dword byte-reversed, the length
+  as a big-endian `u16`, and copies the offset-6 bytes through the thunk
+  `FUN_7b2fd9a4` → `thunk_FUN_7b6a0987` (a `memcpy`). The `0x1020` cap is in the
+  function. This is `forward::send_payload`, and `collect::frame_identity_request`
+  wraps a caller's bytes in it. The offset-6 bytes stay the only vehicle-facing bytes.
+- **Reply read layout, recovered — from the host, not the export.** The
+  virtualized `VCX_PRO_Recv` only fills the PDU; its shape is read by
+  `VCXPT32!ConvertVCXMsg` (`FUN_10006070`, base `0x10000000`), which is not
+  virtualized: a little-endian `u32` flag word at offset 0, a little-endian `u16`
+  length at offset 4, and that many data bytes at offset 6. For ISO 15765 (case
+  `6`/`0x10000`) every data byte is kept; it only rewrites protocol `6`→`5` when
+  flag bit 0 is set. The flag map and the per-protocol trailing drops are already
+  `forward::rx_status`, `delivered_len`, and `reply_protocol`;
+  `collect::reply_application_bytes` and `read_identity_reply` apply that envelope.
+- **Request content, absent.** No `$1A` request builder is in `VCX.dll`,
+  `ManagerCenter.exe`, or `VCXPT32.dll`. A byte-pattern search for the default DID
+  run `C1`..`CC` in `vcx-reconstructed.dll` matched only a coincidental monotonic
+  ramp (`b8 b9 … d7` at `0x7b3329a0`), not a request table. `ConvertPassthruMsg`
+  (`FUN_10005df0`) copies the caller's ISO 15765 `PASSTHRU_MSG.Data` to offset 6
+  unchanged — it forms no request of its own. The service id, the identifiers, and
+  the module CAN id are GM application-layer, built by the diagnostic software, not
+  by this transport. They are the open row, and `docs/tool-boundary.md` keeps them
+  out of this crate.
+- **Recv export internals, blocked.** `VCX_PRO_Recv` (`0x7B2F58E0`) is a `jmp`
+  into section `.V0`; its callees `FUN_7b585b66` / `FUN_7b44679c` decompile to
+  garbage that reads uninitialized `EAX`/`EBP`/`CF` (VMProtect). Not statically
+  recoverable, and not needed: the PDU it writes is laid out by `ConvertVCXMsg` above.
+
 ## What the pass-through copies
 
 `VCXPT32.dll` is the caller `ManagerCenter.exe` is not. `PassThruWriteMsgs`

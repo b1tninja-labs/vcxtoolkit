@@ -48,8 +48,8 @@ clone reads (`--lid` to override; default `C1`..`CA`, `CB`, `CC`). It then print
 saved-read skeleton it would fill and **refuses to transmit**:
 
 ```
-HELD: vehicle read held: the VCX_PRO_Recv read byte layout is not recovered
-next: recover the VCX_PRO_Recv read bytes and the Send PDU request bytes ...
+HELD: vehicle read held: the $1A request content is not recovered
+next: the VCX_PRO_Recv reply envelope and the VCX_PRO_Send framing are recovered, but the Send PDU request content ...
 then: spskit-vit1 --read <saved-read> --code <K17|...> --vin <VIN>
 ```
 
@@ -57,10 +57,12 @@ then: spskit-vit1 --read <saved-read> --code <K17|...> --vin <VIN>
 
 The refusal is two independent gates (`src/collect.rs`):
 
-1. **Recovered-layout gate** — `READ_LAYOUT_RECOVERED` is `false`. The caller's
-   request bytes at a Send PDU's offset 6 and the bytes `VCX_PRO_Recv` writes were
-   not recovered from `VCX.dll` or `ManagerCenter.exe` ([reads.md](reads.md), "The
-   open row"). This crate does not invent them.
+1. **Recovered-layout gate** — `READ_LAYOUT_RECOVERED` is `false`. The frame
+   envelope is recovered both ways — the `VCX_PRO_Send` framing and the
+   `VCX_PRO_Recv` reply read layout (from `VCXPT32!ConvertVCXMsg`) — but the
+   vehicle-facing request *content* (service `$1A`, the identifiers, the module CAN
+   id) is not in `VCX.dll`, `ManagerCenter.exe`, or `VCXPT32.dll`
+   ([reads.md](reads.md), "The open row"). This crate does not invent it.
 2. **Owner opt-in gate** — `--owner-unhold`. Even once the layout is recovered, a
    live read of a vehicle is the owner's decision.
 
@@ -81,10 +83,13 @@ The saved read goes wherever you direct it; `spskit-vit1 --read` consumes that f
 
 ## Next step to enable a real read
 
-1. Recover the `VCX_PRO_Recv` reply body layout and the Send PDU request bytes for
-   the identity read (the `[open]` ROADMAP row). Do not guess them.
-2. Add the recovered request/parse to `collect`, behind the gate, and set the
-   recovered-layout flag with the real bytes.
+1. Recover the Send PDU request *content* for the identity read — service `$1A`,
+   the identifiers, and the module CAN id (the `[open]` ROADMAP row). The frame
+   envelope is already recovered both ways (`frame_identity_request`,
+   `read_identity_reply`); what is missing is the vehicle-facing content, which is
+   not in the VXDIAG transport binaries. Do not guess it.
+2. Once a real request is in hand, set the recovered-layout flag; the parse is
+   already wired behind the gate (`collect::read_identity_reply`).
 3. The owner opts in (`--owner-unhold`) for a read of their own vehicle.
 
 Until step 1 is genuinely done, `collect` stays held.
