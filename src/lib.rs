@@ -47,6 +47,7 @@ pub mod modread;
 mod pci;
 mod remote;
 mod serial;
+mod unlock;
 mod update;
 
 pub use catalog::{FirmwareItem, firmware_for, newer_firmware, parse_catalog};
@@ -113,6 +114,9 @@ pub use remote::{fetch_firmware, fetch_license, fetch_newer_firmware};
 pub use serial::USB_BAUD;
 #[cfg(windows)]
 pub use serial::{Call, OpenError, Port, State, open_usb};
+pub use unlock::{
+    BASE_R, EXPONENT, FINAL_5, FINAL_R, Unlock, unlock_device, unlock_key, unlock_key_r,
+};
 pub use update::{
     FLASH_SEQUENCE_RECOVERED, FlashRefusal, Kept, Refused, UpdatePlan, UpdateStep, flash_gate,
     hold, plan_firmware,
