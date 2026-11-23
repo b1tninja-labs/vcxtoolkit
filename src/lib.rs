@@ -71,17 +71,19 @@ pub use dfu::{
     dfu_get_info, dfu_serial, erase_chip, flash_length_fits, get_mode, in_boot, left_boot,
     name_blocks, poll_passes, rewrite_page, set_mode, write_flash, write_serial,
 };
-pub use exchange::{Deadline, ExchangeError, Patience, SerialPort, exchange, exchange_with};
+pub use exchange::{
+    Deadline, ExchangeError, Patience, SerialPort, exchange, exchange_with, read_message,
+};
 pub use forward::{
     BATTERY_QUERY, BATTERY_SEED, ChannelFields, ClassPick, ComRecord, FILTER_CLEAR, FILTER_PASS,
     FilterCopy, FilterRecord, ForwardError, INIT_WAIT, MAX_FORWARD, NibblePath, Periodic,
     QueuePlace, QueuedMap, QueuedScale, START_MODE, Staged, TIMER_CLEAR, TIMER_PASS, TimerRecord,
     WiredCan, add_filter, add_timer, battery_reading, baud_record, class_pick, close_payload,
-    config_records, copied_data, delivered_len, fast_init, five_baud_payload, j1850_check,
-    lookup_record, mixed_bit, nibble_path, open_code, open_payload, pdu_flags, periodic_timer,
-    place_queue, queued_map, queued_scale, reply_protocol, rx_status, send_payload, set_com_param,
-    set_filter_payload, set_timer_payload, stage_record, start_filter, start_payload, stop_filter,
-    stop_payload, stop_timer, uart_sum, wire_can, wire_id,
+    config_records, copied_data, delivered_len, fast_init, five_baud_payload, flow_control_filter,
+    j1850_check, lookup_record, mixed_bit, nibble_path, open_code, open_payload, pdu_flags,
+    periodic_timer, place_queue, queued_map, queued_scale, reply_protocol, rx_status, send_payload,
+    set_com_param, set_filter_payload, set_timer_payload, stage_record, start_filter,
+    start_payload, stop_filter, stop_payload, stop_timer, uart_sum, wire_can, wire_id,
 };
 pub use frame::{
     DEVICE_CHECKSUM, Frame, FrameError, MAX_PAYLOAD, MAX_SEND, PLUS_BODY_MAX, PLUS_END,
@@ -115,7 +117,10 @@ pub use serial::{Call, OpenError, Port, State, open_usb};
 pub use unlock::{
     BASE_R, EXPONENT, FINAL_5, FINAL_R, Unlock, unlock_device, unlock_key, unlock_key_r,
 };
-pub use update::{Kept, Refused, UpdatePlan, UpdateStep, hold, plan_firmware};
+pub use update::{
+    FLASH_SEQUENCE_RECOVERED, FlashRefusal, Kept, Refused, UpdatePlan, UpdateStep, flash_gate,
+    hold, plan_firmware,
+};
 
 /// The name of this crate, as Cargo knows it.
 #[must_use]

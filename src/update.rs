@@ -238,9 +238,89 @@ pub fn hold(step: &UpdateStep) -> Result<Kept, Refused> {
     }
 }
 
+/// Whether the firmware-flash wire sequence has been recovered in full.
+///
+/// `false` is the honest state, and this is a device write, not a vehicle one —
+/// the owner's dongle, kept entirely separate from the read-first vehicle ethos.
+/// The *structure* of `VCX_DFU_AutoUpdate` is recovered ([`plan_firmware`]), but
+/// two wire pieces are not: the per-page `WrFlash` length is the image's
+/// `0xA5A5A5A5` marker, which exceeds the recovered `0x1026` bound
+/// ([`crate::flash_length_fits`] is `false` for it, see [`UpdateStep::Flash`]),
+/// and the `WrSerial` bytes are a runtime DFU `GetInfo` field, not a recovered
+/// constant ([`UpdateStep::Serial`]). Flashing a guessed sequence could brick the
+/// dongle, so this stays `false` until the flash is recovered, not guessed.
+pub const FLASH_SEQUENCE_RECOVERED: bool = false;
+
+/// Why a firmware flash to the device is refused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FlashRefusal {
+    /// The flash wire sequence is not recovered ([`FLASH_SEQUENCE_RECOVERED`]).
+    SequenceUnrecovered,
+    /// The sequence is recovered but the owner has not opted in to a device write.
+    OwnerHold,
+}
+
+impl FlashRefusal {
+    /// The documented next step this refusal points to.
+    #[must_use]
+    pub fn next_step(self) -> &'static str {
+        match self {
+            Self::SequenceUnrecovered => {
+                "the VCX_DFU_AutoUpdate step order is recovered (plan_firmware), but the per-page \
+                 WrFlash length and the WrSerial bytes are not; recover the real flash sequence \
+                 from the VCX device DLLs, then set the recovered-flash flag; this crate does not \
+                 invent a flash protocol that could brick the dongle"
+            }
+            Self::OwnerHold => {
+                "the flash sequence is recovered, so the owner must opt in to a write of their own \
+                 dongle; pass the owner flash flag to proceed"
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for FlashRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SequenceUnrecovered => {
+                f.write_str("firmware flash held: the flash wire sequence is not recovered")
+            }
+            Self::OwnerHold => {
+                f.write_str("firmware flash held: the owner has not opted in to a device write")
+            }
+        }
+    }
+}
+
+impl std::error::Error for FlashRefusal {}
+
+/// Decide whether a firmware flash to the device may proceed.
+///
+/// Both gates must pass, the recovered-sequence gate first (an owner opt-in means
+/// nothing while the bytes that would be written are unknown). This is the
+/// device-write analogue of [`crate::collect::vehicle_read_gate`]: the dongle is
+/// the owner's, and the flash is explicitly separate from any vehicle traffic.
+///
+/// # Errors
+///
+/// Returns [`FlashRefusal::SequenceUnrecovered`] when `sequence_recovered` is
+/// `false`, then [`FlashRefusal::OwnerHold`] when `owner_opt_in` is `false`.
+pub fn flash_gate(sequence_recovered: bool, owner_opt_in: bool) -> Result<(), FlashRefusal> {
+    if !sequence_recovered {
+        return Err(FlashRefusal::SequenceUnrecovered);
+    }
+    if !owner_opt_in {
+        return Err(FlashRefusal::OwnerHold);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DFU_SERIAL_OFFSET, Kept, Refused, UpdateStep, hold, plan_firmware};
+    use super::{
+        DFU_SERIAL_OFFSET, FLASH_SEQUENCE_RECOVERED, FlashRefusal, Kept, Refused, UpdateStep,
+        flash_gate, hold, plan_firmware,
+    };
     use crate::{Command, ImageError};
 
     fn image(pages: u32) -> Vec<u8> {
@@ -398,5 +478,35 @@ mod tests {
             plan_firmware(&bytes, [1, 9, 4, 2], None),
             Err(ImageError::Record)
         );
+    }
+
+    #[test]
+    fn the_flash_gate_refuses_until_both_flags_pass() {
+        assert_eq!(
+            flash_gate(false, false),
+            Err(FlashRefusal::SequenceUnrecovered)
+        );
+        assert_eq!(
+            flash_gate(false, true),
+            Err(FlashRefusal::SequenceUnrecovered)
+        );
+        // Even with the owner's opt-in, an unrecovered sequence stays held.
+        assert_eq!(flash_gate(true, false), Err(FlashRefusal::OwnerHold));
+        assert_eq!(flash_gate(true, true), Ok(()));
+    }
+
+    #[test]
+    fn the_shipped_flash_flag_keeps_the_gate_closed() {
+        // With the shipped constant and even an owner opt-in, the flash is held.
+        assert_eq!(
+            flash_gate(FLASH_SEQUENCE_RECOVERED, true),
+            Err(FlashRefusal::SequenceUnrecovered)
+        );
+        assert!(
+            FlashRefusal::SequenceUnrecovered
+                .next_step()
+                .contains("WrFlash")
+        );
+        assert!(FlashRefusal::OwnerHold.next_step().contains("opt in"));
     }
 }

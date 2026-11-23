@@ -828,6 +828,44 @@ pub fn start_filter(copy: &FilterCopy<'_>) -> Result<FilterRecord, ForwardError>
     })
 }
 
+/// The `AddFilter` record for a J2534 ISO 15765 `FLOW_CONTROL_FILTER`.
+///
+/// This is the recovered flow-control filter from `VCXPT32!PassThruStartMsgFilter`
+/// (`FUN_10003da0`), reached by the hardware-validated channel bring-up: a kind-3
+/// filter whose pattern is the ECU **response** CAN id, whose mask is all ones
+/// (`FF FF FF FF`), and whose flow-control bytes are the tester **request** CAN id.
+/// Both ids are stored big-endian, four bytes each, exactly as the raw-mode PDU
+/// carries them (SAE J2534-2002 §8.3.2 ISO 15765-4 data format).
+///
+/// SAE J2534-2002 names the three `PASSTHRU_MSG` roles of a `FLOW_CONTROL_FILTER`
+/// (§7.2.1.1 Figure 11 `FLOW_CONTROL_FILTER = 0x03`; §9.2.2.1): the `MaskMsg` is
+/// `FF FF FF FF`, the `PatternMsg` the response id this host receives on, and the
+/// `FlowControlMsg` the request id it transmits on. The VCX dongle does the
+/// ISO 15765-2 flow control itself; without this filter a `VCX_PRO_Send` only
+/// returns a device status ack and the ECU reply is never delivered.
+///
+/// # Errors
+///
+/// Propagates [`start_filter`]'s errors, which a four-byte id and mask do not
+/// trigger (the lengths are equal and under the twelve-byte cap).
+pub fn flow_control_filter(
+    slot: u8,
+    request_id: u32,
+    response_id: u32,
+) -> Result<FilterRecord, ForwardError> {
+    let pattern = response_id.to_be_bytes();
+    let mask = [0xFF_u8; 4];
+    let flow = request_id.to_be_bytes();
+    start_filter(&FilterCopy {
+        slot,
+        kind: 3,
+        pattern: &pattern,
+        mask: &mask,
+        flow: &flow,
+        extend_first: false,
+    })
+}
+
 /// The `AddFilter` record `PassThruStopMsgFilter` sends. The length byte is 0.
 #[must_use]
 pub fn stop_filter(slot: u8) -> FilterRecord {
@@ -1382,11 +1420,11 @@ mod tests {
         FilterRecord, ForwardError, INIT_WAIT, NibblePath, Periodic, TIMER_CLEAR, TIMER_PASS,
         TimerRecord, add_filter, add_timer, battery_reading, baud_record, class_pick,
         close_payload, config_records, copied_data, delivered_len, fast_init, five_baud_payload,
-        j1850_check, lookup_record, mixed_bit, nibble_path, open_code, open_payload, pdu_flags,
-        periodic_timer, place_queue, queued_map, queued_scale, reply_protocol, rx_status,
-        send_payload, set_com_param, set_filter_payload, set_timer_payload, stage_record,
-        start_filter, start_payload, stop_filter, stop_payload, stop_timer, uart_sum, wire_can,
-        wire_id,
+        flow_control_filter, j1850_check, lookup_record, mixed_bit, nibble_path, open_code,
+        open_payload, pdu_flags, periodic_timer, place_queue, queued_map, queued_scale,
+        reply_protocol, rx_status, send_payload, set_com_param, set_filter_payload,
+        set_timer_payload, stage_record, start_filter, start_payload, stop_filter, stop_payload,
+        stop_timer, uart_sum, wire_can, wire_id,
     };
 
     #[test]
@@ -1733,6 +1771,29 @@ mod tests {
         assert_eq!(stopped, [0x01, 0x03, 0x01, 0x01, 0x00]);
         assert_eq!(lookup_record(0).key, 0x8502);
         assert_eq!(lookup_record(0xab).value, 0xab);
+    }
+
+    #[test]
+    fn a_flow_control_filter_carries_the_response_mask_and_request_ids() {
+        // The recovered ISO 15765 FLOW_CONTROL_FILTER (VCXPT32!PassThruStartMsgFilter):
+        // kind-3, pattern = ECU response id (7E8), mask = FF FF FF FF, flow = tester
+        // request id (7E0), each big-endian four bytes (SAE J2534-2002 §8.3.2).
+        let record = flow_control_filter(0, 0x7E0, 0x7E8).unwrap();
+        let payload = add_filter(&[record]).unwrap();
+        assert_eq!(
+            payload,
+            [
+                0x01, // one record
+                0x00, 0x02, 0x02, 0x04, // slot 0, selector 2, kind-3 marker, length 4
+                0x00, 0x00, 0x07, 0xE8, // pattern: response id 7E8
+                0xFF, 0xFF, 0xFF, 0xFF, // mask: all ones
+                0x00, 0x00, 0x07, 0xE0, // flow control: request id 7E0
+            ]
+        );
+        // A 29-bit id keeps its whole word on both the pattern and the flow side.
+        let wide = flow_control_filter(1, 0x18DA_F110, 0x18DA_10F1).unwrap();
+        assert_eq!(wide.from_0x0d, [0x18, 0xDA, 0x10, 0xF1]);
+        assert_eq!(wide.from_0x25, [0x18, 0xDA, 0xF1, 0x10]);
     }
 
     #[test]

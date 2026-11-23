@@ -1,10 +1,9 @@
 //! The SAE J2534-1 return codes and the protocol ids, as plain constants.
 //!
-//! SAE J2534 is not in `primarysource` (it is behind the gated `sae_*`
-//! collection, `docs/j2534.md`), so these values are the public J2534-1 API
-//! numbers, grounded against the stand-in ISO 22900-2:2009 (D-PDU API) where a
-//! clause applies. Nothing here touches hardware or the registry; it only names
-//! the numbers the [`crate::ffi`] exports return.
+//! These are the SAE J2534-1 API numbers (the spec to cite from `primarysource`),
+//! cross-referenced to ISO 22900-2:2009 (D-PDU API) where a clause applies
+//! (`docs/j2534.md`). Nothing here touches hardware or the registry; it only
+//! names the numbers the [`crate::ffi`] exports return.
 
 /// A J2534 `long` return value. Every `PassThru*` export returns one of these.
 pub type Status = i32;
@@ -27,6 +26,8 @@ pub const ERR_DEVICE_NOT_CONNECTED: Status = 0x08;
 pub const ERR_TIMEOUT: Status = 0x09;
 /// A message was malformed. `ERR_INVALID_MSG`.
 pub const ERR_INVALID_MSG: Status = 0x0A;
+/// A read found no queued message. `ERR_BUFFER_EMPTY`.
+pub const ERR_BUFFER_EMPTY: Status = 0x10;
 /// The device id is not one this DLL handed out. `ERR_INVALID_DEVICE_ID`.
 pub const ERR_INVALID_DEVICE_ID: Status = 0x1A;
 
